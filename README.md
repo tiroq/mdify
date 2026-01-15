@@ -4,7 +4,17 @@ Convert documents to Markdown using the Docling library.
 
 ## Installation
 
-### One-line install (recommended)
+### macOS (recommended with pipx)
+
+```bash
+brew install pipx
+pipx ensurepath
+pipx install mdify-cli
+```
+
+Restart your terminal after installation.
+
+### One-line install script
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/tiroq/mdify/main/install.sh | bash
@@ -18,13 +28,13 @@ This will:
 ### Install via pip
 
 ```bash
-pip install mdify
+pip install mdify-cli
 ```
 
 Or with user install (no sudo required):
 
 ```bash
-pip install --user mdify
+pip install --user mdify-cli
 ```
 
 ### Development install
