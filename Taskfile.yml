@@ -163,23 +163,22 @@ tasks:
 
   _confirm-release:
     internal: true
-    vars:
-      VERSION:
-        sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
     interactive: true
     cmds:
       - |
+        VERSION=$(grep '^version = ' pyproject.toml | cut -d'"' -f2)
         echo ""
-        echo "Ready to release version {{.VERSION}}"
-        read -p "Continue with commit, tag, and publish? [y/N] " -n 1 -r
+        echo "Ready to release version $VERSION"
+        printf "Continue with commit, tag, and publish? [y/N] "
+        read -r REPLY
         echo
         if [[ $REPLY =~ ^[Yy]$ ]]; then
           task commit-version
           task tag
           task publish
           echo ""
-          echo "✓ Release {{.VERSION}} complete!"
-          echo "Create GitHub release: {{.REPO_URL}}/releases/new?tag=v{{.VERSION}}"
+          echo "✓ Release $VERSION complete!"
+          echo "Create GitHub release: {{.REPO_URL}}/releases/new?tag=v$VERSION"
         else
           echo "Release cancelled. Changes kept."
           echo "To revert: git checkout pyproject.toml mdify/__init__.py"
