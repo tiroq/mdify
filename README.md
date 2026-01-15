@@ -1,4 +1,4 @@
-# mdfy
+# mdify
 
 Convert documents to Markdown using the Docling library.
 
@@ -12,17 +12,17 @@ pip install -e .
 
 Convert a single file:
 ```bash
-mdfy document.pdf
+mdify document.pdf
 ```
 
 Convert all files in a directory:
 ```bash
-mdfy /path/to/documents --glob "*.pdf"
+mdify /path/to/documents --glob "*.pdf"
 ```
 
 Recursively convert files in a directory:
 ```bash
-mdfy /path/to/documents --recursive --glob "*.pdf"
+mdify /path/to/documents --recursive --glob "*.pdf"
 ```
 
 ## Options
@@ -39,15 +39,15 @@ mdfy /path/to/documents --recursive --glob "*.pdf"
 
 Convert all PDFs in a directory recursively, preserving structure:
 ```bash
-mdfy documents/ --recursive --glob "*.pdf" --out-dir markdown_output
+mdify documents/ --recursive --glob "*.pdf" --out-dir markdown_output
 ```
 
 Convert all documents to a flat output directory:
 ```bash
-mdfy documents/ --recursive --flat --out-dir all_docs
+mdify documents/ --recursive --flat --out-dir all_docs
 ```
 
 Overwrite existing files:
 ```bash
-mdfy documents/ --overwrite
+mdify documents/ --overwrite
 ```

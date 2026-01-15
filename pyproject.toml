@@ -1,5 +1,5 @@
 [project]
-name = "mdfy"
+name = "mdify"
 version = "0.1.0"
 description = "Convert documents to Markdown using Docling"
 readme = "README.md"
@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mdfy = "mdfy.cli:main"
+mdify = "mdify.cli:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]
