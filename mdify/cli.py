@@ -92,14 +92,28 @@ def get_output_path(
     flat: bool,
 ) -> Path:
     """Calculate output path for a given input file."""
-    # Change extension to .md
-    output_name = input_file.stem + ".md"
-    
     if flat:
-        # Place all files directly in output directory
+        # In flat mode, disambiguate files with the same name by incorporating
+        # their relative directory components into the filename.
+        try:
+            relative_path = input_file.relative_to(input_base)
+            parts = list(relative_path.parts)
+        except ValueError:
+            # If input_file is not relative to input_base, fall back to its name
+            parts = [input_file.name]
+
+        stem = Path(parts[-1]).stem
+        parent_prefix = "_".join(parts[:-1])
+        if parent_prefix:
+            output_name = f"{parent_prefix}_{stem}.md"
+        else:
+            output_name = f"{stem}.md"
+
+        # Place all files directly in output directory with disambiguated names
         return output_dir / output_name
     else:
         # Preserve directory structure
+        output_name = input_file.stem + ".md"
         try:
             relative_path = input_file.relative_to(input_base)
             output_path = output_dir / relative_path.parent / output_name
