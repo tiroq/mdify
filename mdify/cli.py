@@ -335,6 +335,20 @@ def run_container(
 # File handling functions
 # =============================================================================
 
+# Supported file extensions (based on Docling InputFormat)
+SUPPORTED_EXTENSIONS = {
+    '.pdf', '.docx', '.pptx', '.html', '.htm',
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.tif',  # images
+    '.asciidoc', '.adoc', '.asc',  # asciidoc
+    '.md', '.markdown',  # markdown
+    '.csv', '.xlsx',  # spreadsheets
+    '.xml',  # XML formats
+    '.json',  # JSON docling
+    '.mp3', '.wav', '.m4a', '.flac',  # audio
+    '.vtt',  # subtitles
+}
+
+
 def get_files_to_convert(input_path: Path, mask: str, recursive: bool) -> List[Path]:
     """Get list of files to convert based on input path and options."""
     files = []
@@ -351,6 +365,13 @@ def get_files_to_convert(input_path: Path, mask: str, recursive: bool) -> List[P
         files = [f for f in files if f.is_file()]
     else:
         raise FileNotFoundError(f"Input path does not exist: {input_path}")
+    
+    # Filter out hidden files and unsupported formats
+    files = [
+        f for f in files
+        if not f.name.startswith('.')
+        and f.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
     
     return files
 
