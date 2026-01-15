@@ -1,6 +1,6 @@
 [project]
 name = "mdify-cli"
-version = "1.0.0"
+version = "1.1.0"
 description = "Lightweight CLI for converting documents to Markdown via Docling container"
 readme = "README.md"
 requires-python = ">=3.8"
