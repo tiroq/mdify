@@ -2,11 +2,183 @@
 """CLI for converting documents to Markdown using Docling."""
 
 import argparse
+import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from docling.document_converter import DocumentConverter
+
+from . import __version__
+
+# Configuration
+MDIFY_HOME = Path.home() / ".mdify"
+LAST_CHECK_FILE = MDIFY_HOME / ".last_check"
+INSTALLER_PATH = MDIFY_HOME / "install.sh"
+GITHUB_API_URL = "https://api.github.com/repos/tiroq/mdify/releases/latest"
+CHECK_INTERVAL_SECONDS = 86400  # 24 hours
+
+
+def _get_remote_version(timeout: int = 5) -> Optional[str]:
+    """
+    Fetch the latest version from GitHub API.
+    
+    Returns:
+        Version string (e.g., "0.2.0") or None if fetch failed.
+    """
+    try:
+        with urlopen(GITHUB_API_URL, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            # GitHub releases use tags like "v0.2.0" or "0.2.0"
+            tag = data.get("tag_name", "")
+            return tag.lstrip("v") if tag else None
+    except (URLError, json.JSONDecodeError, KeyError, TimeoutError):
+        return None
+
+
+def _should_check_for_update() -> bool:
+    """
+    Determine if we should check for updates based on last check time.
+    
+    Returns:
+        True if check should be performed, False otherwise.
+    """
+    # Check if update check is disabled
+    if os.environ.get("MDIFY_NO_UPDATE_CHECK", "").lower() in ("1", "true", "yes"):
+        return False
+    
+    # Check if last check file exists
+    if not LAST_CHECK_FILE.exists():
+        return True
+    
+    try:
+        last_check = float(LAST_CHECK_FILE.read_text().strip())
+        elapsed = time.time() - last_check
+        return elapsed >= CHECK_INTERVAL_SECONDS
+    except (ValueError, OSError):
+        return True
+
+
+def _update_last_check_time() -> None:
+    """Update the last check timestamp file."""
+    try:
+        LAST_CHECK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_CHECK_FILE.write_text(str(time.time()))
+    except OSError:
+        pass  # Silently ignore write errors
+
+
+def _compare_versions(current: str, remote: str) -> bool:
+    """
+    Compare version strings.
+    
+    Returns:
+        True if remote version is newer than current.
+    """
+    try:
+        current_parts = [int(x) for x in current.split(".")]
+        remote_parts = [int(x) for x in remote.split(".")]
+        
+        # Pad shorter version with zeros
+        max_len = max(len(current_parts), len(remote_parts))
+        current_parts.extend([0] * (max_len - len(current_parts)))
+        remote_parts.extend([0] * (max_len - len(remote_parts)))
+        
+        return remote_parts > current_parts
+    except (ValueError, AttributeError):
+        return False
+
+
+def _run_upgrade() -> bool:
+    """
+    Run the upgrade installer.
+    
+    Returns:
+        True if upgrade was successful, False otherwise.
+    """
+    if not INSTALLER_PATH.exists():
+        print(
+            f"Installer not found at {INSTALLER_PATH}. "
+            "Please reinstall mdify manually.",
+            file=sys.stderr,
+        )
+        return False
+    
+    try:
+        result = subprocess.run(
+            [str(INSTALLER_PATH), "--upgrade", "-y"],
+            check=True,
+        )
+        return result.returncode == 0
+    except subprocess.CalledProcessError:
+        return False
+    except OSError as e:
+        print(f"Failed to run installer: {e}", file=sys.stderr)
+        return False
+
+
+def check_for_update(force: bool = False) -> None:
+    """
+    Check for updates and prompt user to upgrade if available.
+    
+    Args:
+        force: If True, check regardless of last check time and show errors.
+    """
+    # Skip check if not due (unless forced)
+    if not force and not _should_check_for_update():
+        return
+    
+    # Fetch remote version
+    remote_version = _get_remote_version()
+    
+    if remote_version is None:
+        if force:
+            print(
+                "Error: Failed to check for updates. "
+                "Please check your internet connection.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        # Silently skip in auto mode
+        return
+    
+    # Update last check time
+    _update_last_check_time()
+    
+    # Compare versions
+    if not _compare_versions(__version__, remote_version):
+        if force:
+            print(f"mdify is up to date (version {__version__})")
+        return
+    
+    # Prompt for upgrade
+    print(f"\n{'='*50}")
+    print(f"A new version of mdify is available!")
+    print(f"  Current version: {__version__}")
+    print(f"  Latest version:  {remote_version}")
+    print(f"{'='*50}\n")
+    
+    try:
+        response = input("Run upgrade now? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()  # Newline for clean output
+        return
+    
+    if response in ("y", "yes"):
+        print("\nStarting upgrade...\n")
+        if _run_upgrade():
+            print("\nUpgrade completed! Please restart mdify.")
+            sys.exit(0)
+        else:
+            print("\nUpgrade failed. You can try manually with:")
+            print(f"  {INSTALLER_PATH} --upgrade")
+    else:
+        print(f"\nTo upgrade later, run: {INSTALLER_PATH} --upgrade\n")
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,6 +191,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "input",
         type=str,
+        nargs="?",
         help="Input file or directory to convert",
     )
     
@@ -58,6 +231,18 @@ def parse_args() -> argparse.Namespace:
         "--quiet",
         action="store_true",
         help="Suppress progress messages",
+    )
+    
+    parser.add_argument(
+        "--check-update",
+        action="store_true",
+        help="Check for available updates and exit",
+    )
+    
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"mdify {__version__}",
     )
     
     return parser.parse_args()
@@ -174,6 +359,20 @@ def convert_file(
 def main() -> int:
     """Main entry point for the CLI."""
     args = parse_args()
+    
+    # Handle --check-update flag
+    if args.check_update:
+        check_for_update(force=True)
+        return 0
+    
+    # Check for updates in background (daily, silent on errors)
+    check_for_update(force=False)
+    
+    # Validate input is provided
+    if args.input is None:
+        print("Error: Input file or directory is required", file=sys.stderr)
+        print("Usage: mdify <input> [options]", file=sys.stderr)
+        return 1
     
     # Convert input to Path
     input_path = Path(args.input).resolve()
