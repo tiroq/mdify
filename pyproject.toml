@@ -1,5 +1,5 @@
 [project]
-name = "mdify"
+name = "mdify-cli"
 version = "0.1.3"
 description = "Convert documents to Markdown using Docling"
 readme = "README.md"
