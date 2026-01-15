@@ -4,7 +4,34 @@ Convert documents to Markdown using the Docling library.
 
 ## Installation
 
+### One-line install (recommended)
+
 ```bash
+curl -sSL https://raw.githubusercontent.com/tiroq/mdify/main/install.sh | bash
+```
+
+This will:
+- Install mdify to `~/.mdify/`
+- Create a virtual environment with all dependencies
+- Add `mdify` command to your PATH
+
+### Install via pip
+
+```bash
+pip install mdify
+```
+
+Or with user install (no sudo required):
+
+```bash
+pip install --user mdify
+```
+
+### Development install
+
+```bash
+git clone https://github.com/tiroq/mdify.git
+cd mdify
 pip install -e .
 ```
 
@@ -34,6 +61,8 @@ mdify /path/to/documents --recursive --glob "*.pdf"
 - `--flat`: Disable directory structure preservation in output
 - `--overwrite`: Overwrite existing output files
 - `--quiet`: Suppress progress messages
+- `--check-update`: Check for available updates and exit
+- `--version`: Show version and exit
 
 ### Flat Mode Behavior
 
@@ -59,3 +88,59 @@ Overwrite existing files:
 ```bash
 mdify documents/ --overwrite
 ```
+
+## Updates
+
+mdify automatically checks for updates once per day. When a new version is available, you'll be prompted to upgrade:
+
+```
+==================================================
+A new version of mdify is available!
+  Current version: 0.1.0
+  Latest version:  0.2.0
+==================================================
+
+Run upgrade now? [y/N]
+```
+
+### Manual upgrade
+
+```bash
+~/.mdify/install.sh --upgrade
+```
+
+### Check for updates manually
+
+```bash
+mdify --check-update
+```
+
+### Disable update checks
+
+To disable automatic update checks, set the environment variable:
+
+```bash
+export MDIFY_NO_UPDATE_CHECK=1
+```
+
+Or for a single run:
+
+```bash
+MDIFY_NO_UPDATE_CHECK=1 mdify document.pdf
+```
+
+## Uninstall
+
+```bash
+~/.mdify/uninstall.sh
+```
+
+Or if installed via pip:
+
+```bash
+pip uninstall mdify
+```
+
+## License
+
+MIT
