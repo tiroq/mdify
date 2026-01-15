@@ -102,7 +102,8 @@ def get_output_path(
             # If input_file is not relative to input_base, fall back to its name
             parts = [input_file.name]
 
-        stem = Path(parts[-1]).stem
+        # Get stem from the filename (last part)
+        stem = input_file.stem
         parent_prefix = "_".join(parts[:-1])
         if parent_prefix:
             output_name = f"{parent_prefix}_{stem}.md"
