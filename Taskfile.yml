@@ -5,6 +5,10 @@ vars:
   CURRENT_VERSION:
     sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
   REPO_URL: https://github.com/tiroq/mdify
+  CONTAINER_REGISTRY: ghcr.io
+  CONTAINER_IMAGE: tiroq/mdify-runtime
+  CONTAINER_RUNTIME:
+    sh: command -v docker >/dev/null 2>&1 && echo "docker" || echo "podman"
 
 tasks:
   default:
@@ -264,3 +268,42 @@ tasks:
       - echo ""
       - echo "Build artifacts"
       - ls -lh dist/ 2>/dev/null || echo "  (no builds yet - run 'task build')"
+
+  # Container tasks
+  container-build:
+    desc: Build the mdify-runtime container image locally
+    cmds:
+      - echo "Building container image with {{.CONTAINER_RUNTIME}}..."
+      - '{{.CONTAINER_RUNTIME}} build -t {{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}} -t {{.CONTAINER_IMAGE}}:latest ./runtime'
+      - echo "✓ Built {{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}}"
+
+  container-push:
+    desc: Push container image to GitHub Container Registry
+    cmds:
+      - echo "Pushing container image to {{.CONTAINER_REGISTRY}}..."
+      - '{{.CONTAINER_RUNTIME}} tag {{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}} {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}}'
+      - '{{.CONTAINER_RUNTIME}} tag {{.CONTAINER_IMAGE}}:latest {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:latest'
+      - '{{.CONTAINER_RUNTIME}} push {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}}'
+      - '{{.CONTAINER_RUNTIME}} push {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:latest'
+      - echo "✓ Pushed to {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}"
+
+  container-run:
+    desc: Run a test conversion with the local container
+    cmds:
+      - echo "Running test conversion..."
+      - echo "Usage task container-run -- /path/to/document.pdf"
+      - |
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          {{.CONTAINER_RUNTIME}} run --rm -v "$(dirname {{.CLI_ARGS}}):/data" {{.CONTAINER_IMAGE}}:latest --in "/data/$(basename {{.CLI_ARGS}})" --out "/data/$(basename {{.CLI_ARGS}} .pdf).md"
+        else
+          echo "No input file specified"
+        fi
+
+  container-clean:
+    desc: Remove local container images
+    cmds:
+      - '{{.CONTAINER_RUNTIME}} rmi {{.CONTAINER_IMAGE}}:latest 2>/dev/null || true'
+      - '{{.CONTAINER_RUNTIME}} rmi {{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}} 2>/dev/null || true'
+      - '{{.CONTAINER_RUNTIME}} rmi {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:latest 2>/dev/null || true'
+      - '{{.CONTAINER_RUNTIME}} rmi {{.CONTAINER_REGISTRY}}/{{.CONTAINER_IMAGE}}:{{.CURRENT_VERSION}} 2>/dev/null || true'
+      - echo "✓ Removed local container images"
