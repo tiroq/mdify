@@ -128,7 +128,10 @@ tasks:
     deps: [build]
     cmds:
       - echo "Uploading to TestPyPI..."
-      - '{{.PYTHON}} -m twine upload --repository testpypi dist/*'
+      - '{{.PYTHON}} -m venv .build_env'
+      - .build_env/bin/pip install --upgrade twine -q
+      - .build_env/bin/python -m twine upload --repository testpypi dist/*
+      - rm -rf .build_env
       - echo "✓ Published to TestPyPI"
       - echo "Test installation"
       - echo "  pip install --index-url https://test.pypi.org/simple/ --no-deps mdify"
@@ -138,7 +141,10 @@ tasks:
     deps: [build]
     cmds:
       - echo "⚠️  Publishing to production PyPI..."
-      - '{{.PYTHON}} -m twine upload dist/*'
+      - '{{.PYTHON}} -m venv .build_env'
+      - .build_env/bin/pip install --upgrade twine -q
+      - .build_env/bin/python -m twine upload dist/*
+      - rm -rf .build_env
       - echo "✓ Published to PyPI"
       - echo "Install with pip install mdify"
 
