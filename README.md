@@ -35,6 +35,14 @@ mdify /path/to/documents --recursive --glob "*.pdf"
 - `--overwrite`: Overwrite existing output files
 - `--quiet`: Suppress progress messages
 
+### Flat Mode Behavior
+
+When using `--flat`, all output files are placed directly in the output directory. To prevent name collisions when multiple input files have the same name (e.g., `dir1/file.pdf` and `dir2/file.pdf`), the directory path is incorporated into the filename:
+
+- `docs/subdir1/file.pdf` → `output/subdir1_file.md`
+- `docs/subdir2/file.pdf` → `output/subdir2_file.md`
+- `docs/a/b/c/file.pdf` → `output/a_b_c_file.md`
+
 ## Examples
 
 Convert all PDFs in a directory recursively, preserving structure:
