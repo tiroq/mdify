@@ -1,0 +1,16 @@
+[project]
+name = "mdfy"
+version = "0.1.0"
+description = "Convert documents to Markdown using Docling"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "docling>=1.0.0",
+]
+
+[project.scripts]
+mdfy = "mdfy.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_system"
