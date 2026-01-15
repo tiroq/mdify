@@ -34,8 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create work directories
 RUN mkdir -p /work/in /work/out
 
-# Install Python dependencies
-RUN pip install --no-cache-dir docling>=1.0.0
+# Install Python dependencies with retry and increased timeout
+RUN pip install --no-cache-dir --timeout 300 --retries 5 docling>=1.0.0
 
 # Copy conversion script
 COPY convert.py /app/convert.py
