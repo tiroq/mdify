@@ -1,10 +1,15 @@
 # mdify
 
-Convert documents to Markdown using the Docling library.
+A lightweight CLI for converting documents to Markdown. The CLI is fast to install via pipx, while the heavy ML conversion (Docling) runs inside a container.
+
+## Requirements
+
+- **Python 3.8+**
+- **Docker** or **Podman** (for document conversion)
 
 ## Installation
 
-### macOS (recommended with pipx)
+### macOS (recommended)
 
 ```bash
 brew install pipx
@@ -14,27 +19,18 @@ pipx install mdify-cli
 
 Restart your terminal after installation.
 
-### One-line install script
+### Linux
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/tiroq/mdify/main/install.sh | bash
+python3 -m pip install --user pipx
+pipx ensurepath
+pipx install mdify-cli
 ```
-
-This will:
-- Install mdify to `~/.mdify/`
-- Create a virtual environment with all dependencies
-- Add `mdify` command to your PATH
 
 ### Install via pip
 
 ```bash
 pip install mdify-cli
-```
-
-Or with user install (no sudo required):
-
-```bash
-pip install --user mdify-cli
 ```
 
 ### Development install
@@ -47,133 +43,172 @@ pip install -e .
 
 ## Usage
 
+### Basic conversion
+
 Convert a single file:
 ```bash
 mdify document.pdf
 ```
 
-Convert all files in a directory:
+The first run will automatically pull the container image (~2GB) if not present.
+
+### Convert multiple files
+
+Convert all PDFs in a directory:
 ```bash
-mdify /path/to/documents --glob "*.pdf"
+mdify /path/to/documents -g "*.pdf"
 ```
 
-Recursively convert files in a directory:
+Recursively convert files:
 ```bash
-mdify /path/to/documents --recursive --glob "*.pdf"
+mdify /path/to/documents -r -g "*.pdf"
 ```
+
+### Masking sensitive content
+
+Mask PII and sensitive content in images:
+```bash
+mdify document.pdf -m
+mdify document.pdf --mask
+```
+
+This uses Docling's content-aware masking to obscure sensitive information in embedded images.
 
 ## Options
 
-- `input`: Input file or directory to convert (required)
-- `--out-dir DIR`: Output directory for converted files (default: output)
-- `--glob PATTERN`: Glob pattern for filtering files in directory (default: *)
-- `--recursive`: Recursively scan directories
-- `--flat`: Disable directory structure preservation in output
-- `--overwrite`: Overwrite existing output files
-- `--quiet`: Suppress progress messages
-- `--check-update`: Check for available updates and exit
-- `--version`: Show version and exit
+| Option | Description |
+|--------|-------------|
+| `input` | Input file or directory to convert (required) |
+| `-o, --out-dir DIR` | Output directory for converted files (default: output) |
+| `-g, --glob PATTERN` | Glob pattern for filtering files (default: *) |
+| `-r, --recursive` | Recursively scan directories |
+| `--flat` | Disable directory structure preservation |
+| `--overwrite` | Overwrite existing output files |
+| `-q, --quiet` | Suppress progress messages |
+| `-m, --mask` | Mask PII and sensitive content in images |
+| `--runtime RUNTIME` | Container runtime: docker or podman (auto-detected) |
+| `--image IMAGE` | Custom container image (default: ghcr.io/tiroq/mdify-runtime:latest) |
+| `--pull POLICY` | Image pull policy: always, missing, never (default: missing) |
+| `--check-update` | Check for available updates and exit |
+| `--version` | Show version and exit |
 
-### Flat Mode Behavior
+### Flat Mode
 
-When using `--flat`, all output files are placed directly in the output directory. To prevent name collisions when multiple input files have the same name (e.g., `dir1/file.pdf` and `dir2/file.pdf`), the directory path is incorporated into the filename:
+With `--flat`, all output files are placed directly in the output directory. Directory paths are incorporated into filenames to prevent collisions:
 
 - `docs/subdir1/file.pdf` → `output/subdir1_file.md`
 - `docs/subdir2/file.pdf` → `output/subdir2_file.md`
-- `docs/a/b/c/file.pdf` → `output/a_b_c_file.md`
 
 ## Examples
 
-Convert all PDFs in a directory recursively, preserving structure:
+Convert all PDFs recursively, preserving structure:
 ```bash
-mdify documents/ --recursive --glob "*.pdf" --out-dir markdown_output
+mdify documents/ -r -g "*.pdf" -o markdown_output
 ```
 
-Convert all documents to a flat output directory:
+Convert with Podman instead of Docker:
 ```bash
-mdify documents/ --recursive --flat --out-dir all_docs
+mdify document.pdf --runtime podman
 ```
 
-Overwrite existing files:
+Use a custom/local container image:
 ```bash
-mdify documents/ --overwrite
+mdify document.pdf --image my-custom-image:latest
+```
+
+Force pull latest container image:
+```bash
+mdify document.pdf --pull
+```
+
+## Architecture
+
+```
+┌──────────────────┐     ┌─────────────────────────────────┐
+│   mdify CLI      │     │  Container (Docker/Podman)      │
+│   (lightweight)  │────▶│  ┌───────────────────────────┐  │
+│                  │     │  │  Docling + ML Models      │  │
+│  - File handling │◀────│  │  - PDF parsing            │  │
+│  - Container     │     │  │  - OCR (Tesseract)        │  │
+│    orchestration │     │  │  - Document conversion    │  │
+└──────────────────┘     │  └───────────────────────────┘  │
+                         └─────────────────────────────────┘
+```
+
+The CLI:
+- Installs in seconds via pipx (no ML dependencies)
+- Automatically detects Docker or Podman
+- Pulls the runtime container on first use
+- Mounts files and runs conversions in the container
+
+## Container Image
+
+The runtime container is hosted at:
+```
+ghcr.io/tiroq/mdify-runtime:latest
+```
+
+To build locally:
+```bash
+cd runtime
+docker build -t mdify-runtime .
 ```
 
 ## Updates
 
-mdify automatically checks for updates once per day. When a new version is available, you'll be prompted to upgrade:
+mdify checks for updates daily. When a new version is available:
 
 ```
 ==================================================
 A new version of mdify is available!
-  Current version: 0.1.0
-  Latest version:  0.2.0
+  Current version: 0.3.0
+  Latest version:  0.4.0
 ==================================================
 
 Run upgrade now? [y/N]
 ```
 
-### Manual upgrade
-
-```bash
-~/.mdify/install.sh --upgrade
-```
-
-### Check for updates manually
-
-```bash
-mdify --check-update
-```
-
 ### Disable update checks
-
-To disable automatic update checks, set the environment variable:
 
 ```bash
 export MDIFY_NO_UPDATE_CHECK=1
 ```
 
-Or for a single run:
-
-```bash
-MDIFY_NO_UPDATE_CHECK=1 mdify document.pdf
-```
-
 ## Uninstall
 
 ```bash
-~/.mdify/uninstall.sh
+pipx uninstall mdify-cli
 ```
 
 Or if installed via pip:
 
 ```bash
-pip uninstall mdify
+pip uninstall mdify-cli
 ```
 
 ## Development
 
+### Task automation
+
+This project uses [Task](https://taskfile.dev) for automation:
+
+```bash
+# Show available tasks
+task
+
+# Build package
+task build
+
+# Build container locally
+task container-build
+
+# Release workflow
+task release-patch
+```
+
 ### Building for PyPI
 
-Install build tools:
-
-```bash
-pip install --upgrade build twine
-```
-
-Build the package:
-
-```bash
-python -m build
-```
-
-Test locally:
-
-```bash
-pip install dist/mdify-*.whl
-```
-
-See [PUBLISHING.md](PUBLISHING.md) for complete PyPI publishing instructions.
+See [PUBLISHING.md](PUBLISHING.md) for complete publishing instructions.
 
 ## License
 
