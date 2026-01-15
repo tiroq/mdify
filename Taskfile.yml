@@ -258,7 +258,7 @@ tasks:
   info:
     desc: Show package information
     cmds:
-      - echo "Package mdify"
+      - echo "Package mdify-cli"
       - echo "Version {{.CURRENT_VERSION}}"
       - echo "Repository {{.REPO_URL}}"
       - echo ""
