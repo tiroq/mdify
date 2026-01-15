@@ -134,7 +134,7 @@ tasks:
       - rm -rf .build_env
       - echo "✓ Published to TestPyPI"
       - echo "Test installation"
-      - echo "  pip install --index-url https://test.pypi.org/simple/ --no-deps mdify"
+      - echo "  pip install --index-url https://test.pypi.org/simple/ --no-deps mdify-cli"
 
   publish:
     desc: Build and upload to PyPI (production)
@@ -146,7 +146,7 @@ tasks:
       - .build_env/bin/python -m twine upload dist/*
       - rm -rf .build_env
       - echo "✓ Published to PyPI"
-      - echo "Install with pip install mdify"
+      - echo "Install with pip install mdify-cli"
 
   # Combined release workflow
   release-patch:
