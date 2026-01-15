@@ -1,0 +1,261 @@
+version: '3'
+
+vars:
+  PYTHON: python3
+  CURRENT_VERSION:
+    sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
+  REPO_URL: https://github.com/tiroq/mdify
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # Development tasks
+  install:
+    desc: Install package in development mode
+    cmds:
+      - '{{.PYTHON}} -m pip install -e .'
+
+  install-dev:
+    desc: Install package with development dependencies
+    cmds:
+      - '{{.PYTHON}} -m pip install -e ".[dev]"'
+
+  clean:
+    desc: Clean build artifacts and cache files
+    cmds:
+      - rm -rf build/ dist/ *.egg-info
+      - rm -rf .build_env
+      - find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+      - find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+  # Build tasks
+  build:
+    desc: Build package distributions (wheel and sdist)
+    deps: [clean]
+    cmds:
+      - '{{.PYTHON}} -m venv .build_env'
+      - .build_env/bin/pip install --upgrade pip build twine -q
+      - .build_env/bin/python -m build
+      - .build_env/bin/python -m twine check dist/*
+      - rm -rf .build_env
+      - echo "✓ Build complete!"
+      - ls -lh dist/
+
+  check:
+    desc: Check package with twine
+    cmds:
+      - '{{.PYTHON}} -m twine check dist/*'
+
+  # Version management
+  version:
+    desc: Show current version
+    cmds:
+      - echo "Current version:{{.CURRENT_VERSION}}"
+    silent: true
+
+  bump-patch:
+    desc: Bump patch version (0.1.0 -> 0.1.1)
+    cmds:
+      - task: _bump
+        vars:
+          PART: patch
+
+  bump-minor:
+    desc: Bump minor version (0.1.0 -> 0.2.0)
+    cmds:
+      - task: _bump
+        vars:
+          PART: minor
+
+  bump-major:
+    desc: Bump major version (0.1.0 -> 1.0.0)
+    cmds:
+      - task: _bump
+        vars:
+          PART: major
+
+  _bump:
+    internal: true
+    vars:
+      NEW_VERSION:
+        sh: |
+          current="{{.CURRENT_VERSION}}"
+          IFS='.' read -r major minor patch <<< "$current"
+          case "{{.PART}}" in
+            major) echo "$((major + 1)).0.0" ;;
+            minor) echo "${major}.$((minor + 1)).0" ;;
+            patch) echo "${major}.${minor}.$((patch + 1))" ;;
+          esac
+    cmds:
+      - echo "Bumping {{.PART}} version {{.CURRENT_VERSION}} -> {{.NEW_VERSION}}"
+      - sed -i.bak 's/^version = ".*"/version = "{{.NEW_VERSION}}"/' pyproject.toml && rm pyproject.toml.bak
+      - sed -i.bak 's/^__version__ = ".*"/__version__ = "{{.NEW_VERSION}}"/' mdify/__init__.py && rm mdify/__init__.py.bak
+      - echo "✓ Version bumped to {{.NEW_VERSION}}"
+      - echo "Next steps"
+      - echo "  1. Review changes with git diff"
+      - echo "  2. Commit with task commit-version"
+      - echo "  3. Build and publish with task publish"
+
+  commit-version:
+    desc: Commit version bump changes
+    vars:
+      VERSION:
+        sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
+    cmds:
+      - git add pyproject.toml mdify/__init__.py
+      - git commit -m "Bump version to {{.VERSION}}"
+      - echo "✓ Version {{.VERSION}} committed"
+      - echo "Next run task tag to create git tag"
+
+  tag:
+    desc: Create and push git tag for current version
+    vars:
+      VERSION:
+        sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
+    cmds:
+      - git tag -a "v{{.VERSION}}" -m "Release version {{.VERSION}}"
+      - git push origin "v{{.VERSION}}"
+      - echo "✓ Tag v{{.VERSION}} created and pushed"
+      - echo "Next run task build to build package"
+
+  # Publishing tasks
+  publish-test:
+    desc: Build and upload to TestPyPI
+    deps: [build]
+    cmds:
+      - echo "Uploading to TestPyPI..."
+      - '{{.PYTHON}} -m twine upload --repository testpypi dist/*'
+      - echo "✓ Published to TestPyPI"
+      - echo "Test installation"
+      - echo "  pip install --index-url https://test.pypi.org/simple/ --no-deps mdify"
+
+  publish:
+    desc: Build and upload to PyPI (production)
+    deps: [build]
+    cmds:
+      - echo "⚠️  Publishing to production PyPI..."
+      - '{{.PYTHON}} -m twine upload dist/*'
+      - echo "✓ Published to PyPI"
+      - echo "Install with pip install mdify"
+
+  # Combined release workflow
+  release-patch:
+    desc: Complete patch release (bump, commit, tag, publish)
+    cmds:
+      - task: bump-patch
+      - task: _confirm-release
+
+  release-minor:
+    desc: Complete minor release (bump, commit, tag, publish)
+    cmds:
+      - task: bump-minor
+      - task: _confirm-release
+
+  release-major:
+    desc: Complete major release (bump, commit, tag, publish)
+    cmds:
+      - task: bump-major
+      - task: _confirm-release
+
+  _confirm-release:
+    internal: true
+    vars:
+      VERSION:
+        sh: grep '^version = ' pyproject.toml | cut -d'"' -f2
+    interactive: true
+    cmds:
+      - |
+        echo ""
+        echo "Ready to release version {{.VERSION}}"
+        read -p "Continue with commit, tag, and publish? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+          task commit-version
+          task tag
+          task publish
+          echo ""
+          echo "✓ Release {{.VERSION}} complete!"
+          echo "Create GitHub release: {{.REPO_URL}}/releases/new?tag=v{{.VERSION}}"
+        else
+          echo "Release cancelled. Changes kept."
+          echo "To revert: git checkout pyproject.toml mdify/__init__.py"
+        fi
+
+  # Testing tasks
+  test-install:
+    desc: Test package installation in clean venv
+    deps: [build]
+    cmds:
+      - rm -rf test_env
+      - '{{.PYTHON}} -m venv test_env'
+      - test_env/bin/pip install dist/*.whl
+      - test_env/bin/mdify --version
+      - rm -rf test_env
+      - echo "✓ Package installation test passed"
+
+  test-testpypi:
+    desc: Test installation from TestPyPI
+    cmds:
+      - rm -rf test_env
+      - '{{.PYTHON}} -m venv test_env'
+      - test_env/bin/pip install --index-url https://test.pypi.org/simple/ --no-deps mdify
+      - test_env/bin/mdify --version
+      - rm -rf test_env
+      - echo "✓ TestPyPI installation test passed"
+
+  # Documentation tasks
+  docs-build:
+    desc: Build documentation (if docs exist)
+    cmds:
+      - echo "Documentation build not configured yet"
+
+  # Git tasks
+  push:
+    desc: Push current branch and tags
+    cmds:
+      - git push
+      - git push --tags
+
+  status:
+    desc: Show git status and current version
+    cmds:
+      - echo "Version:{{.CURRENT_VERSION}}"
+      - git status -s
+
+  # Utility tasks
+  setup-pypirc:
+    desc: Create ~/.pypirc template
+    cmds:
+      - |
+        cat > ~/.pypirc << 'PYPIRC_EOF'
+        [distutils]
+        index-servers =
+            pypi
+            testpypi
+
+        [pypi]
+        username = __token__
+        password = pypi-YOUR-PYPI-API-TOKEN
+
+        [testpypi]
+        repository = https://test.pypi.org/legacy/
+        username = __token__
+        password = pypi-YOUR-TESTPYPI-API-TOKEN
+        PYPIRC_EOF
+      - chmod 600 ~/.pypirc
+      - echo "✓ Created ~/.pypirc template"
+      - echo "Edit the file and replace YOUR-*-TOKEN with actual tokens"
+
+  info:
+    desc: Show package information
+    cmds:
+      - echo "Package mdify"
+      - echo "Version {{.CURRENT_VERSION}}"
+      - echo "Repository {{.REPO_URL}}"
+      - echo ""
+      - echo "Build artifacts"
+      - ls -lh dist/ 2>/dev/null || echo "  (no builds yet - run 'task build')"
