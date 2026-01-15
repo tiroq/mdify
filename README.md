@@ -141,6 +141,30 @@ Or if installed via pip:
 pip uninstall mdify
 ```
 
+## Development
+
+### Building for PyPI
+
+Install build tools:
+
+```bash
+pip install --upgrade build twine
+```
+
+Build the package:
+
+```bash
+python -m build
+```
+
+Test locally:
+
+```bash
+pip install dist/mdify-*.whl
+```
+
+See [PUBLISHING.md](PUBLISHING.md) for complete PyPI publishing instructions.
+
 ## License
 
 MIT
