@@ -1,6 +1,6 @@
 [project]
 name = "mdify-cli"
-version = "1.4.0"
+version = "1.4.1"
 description = "Lightweight CLI for converting documents to Markdown via Docling container"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -41,3 +41,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["mdify", "mdify.*"]
 exclude = ["runtime", "runtime.*"]
+
+[tool.setuptools.package-data]
+mdify = ["../assets/*.png"]

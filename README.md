@@ -1,6 +1,6 @@
 # mdify
 
-![MDify banner](assets/mdify.png)
+![mdify banner](https://raw.githubusercontent.com/tiroq/mdify/main/assets/mdify.png)
 
 [![PyPI](https://img.shields.io/pypi/v/mdify-cli?logo=python&style=flat-square)](https://pypi.org/project/mdify-cli/)
 [![Container](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker&style=flat-square)](https://github.com/tiroq/mdify/pkgs/container/mdify-runtime)
