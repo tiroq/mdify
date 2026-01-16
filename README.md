@@ -6,7 +6,7 @@
 [![Container](https://img.shields.io/badge/container-ghcr.io-blue?logo=docker&style=flat-square)](https://github.com/tiroq/mdify/pkgs/container/mdify-runtime)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
-A lightweight CLI for converting documents to Markdown. The CLI is fast to install via pipx, while the heavy ML conversion (Docling) runs inside a container.
+A lightweight CLI for converting documents to Markdown. The CLI is fast to install via pipx, while the heavy ML conversion runs inside a container.
 
 ## Requirements
 
