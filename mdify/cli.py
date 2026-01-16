@@ -25,8 +25,7 @@ from . import __version__
 # Configuration
 MDIFY_HOME = Path.home() / ".mdify"
 LAST_CHECK_FILE = MDIFY_HOME / ".last_check"
-INSTALLER_PATH = MDIFY_HOME / "install.sh"
-GITHUB_API_URL = "https://api.github.com/repos/tiroq/mdify/releases/latest"
+PYPI_API_URL = "https://pypi.org/pypi/mdify-cli/json"
 CHECK_INTERVAL_SECONDS = 86400  # 24 hours
 
 # Container configuration
@@ -40,16 +39,16 @@ SUPPORTED_RUNTIMES = ("docker", "podman")
 
 def _get_remote_version(timeout: int = 5) -> Optional[str]:
     """
-    Fetch the latest version from GitHub API.
+    Fetch the latest version from PyPI.
     
     Returns:
-        Version string (e.g., "0.2.0") or None if fetch failed.
+        Version string (e.g., "1.1.0") or None if fetch failed.
     """
     try:
-        with urlopen(GITHUB_API_URL, timeout=timeout) as response:
+        with urlopen(PYPI_API_URL, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
-            tag = data.get("tag_name", "")
-            return tag.lstrip("v") if tag else None
+            version = data.get("info", {}).get("version", "")
+            return version if version else None
     except (URLError, json.JSONDecodeError, KeyError, TimeoutError):
         return None
 
@@ -104,34 +103,6 @@ def _compare_versions(current: str, remote: str) -> bool:
         return False
 
 
-def _run_upgrade() -> bool:
-    """
-    Run the upgrade installer.
-    
-    Returns:
-        True if upgrade was successful, False otherwise.
-    """
-    if not INSTALLER_PATH.exists():
-        print(
-            f"Installer not found at {INSTALLER_PATH}. "
-            "Please reinstall mdify manually.",
-            file=sys.stderr,
-        )
-        return False
-    
-    try:
-        result = subprocess.run(
-            [str(INSTALLER_PATH), "--upgrade", "-y"],
-            check=True,
-        )
-        return result.returncode == 0
-    except subprocess.CalledProcessError:
-        return False
-    except OSError as e:
-        print(f"Failed to run installer: {e}", file=sys.stderr)
-        return False
-
-
 def check_for_update(force: bool = False) -> None:
     """
     Check for updates and prompt user to upgrade if available.
@@ -162,27 +133,13 @@ def check_for_update(force: bool = False) -> None:
         return
     
     print(f"\n{'='*50}")
-    print(f"A new version of mdify is available!")
+    print(f"A new version of mdify-cli is available!")
     print(f"  Current version: {__version__}")
     print(f"  Latest version:  {remote_version}")
-    print(f"{'='*50}\n")
-    
-    try:
-        response = input("Run upgrade now? [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return
-    
-    if response in ("y", "yes"):
-        print("\nStarting upgrade...\n")
-        if _run_upgrade():
-            print("\nUpgrade completed! Please restart mdify.")
-            sys.exit(0)
-        else:
-            print("\nUpgrade failed. You can try manually with:")
-            print(f"  {INSTALLER_PATH} --upgrade")
-    else:
-        print(f"\nTo upgrade later, run: {INSTALLER_PATH} --upgrade\n")
+    print(f"{'='*50}")
+    print(f"\nTo upgrade, run:")
+    print(f"  pipx upgrade mdify-cli")
+    print(f"  # or: pip install --upgrade mdify-cli\n")
 
 
 # =============================================================================
