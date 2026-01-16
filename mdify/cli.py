@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -262,14 +263,68 @@ def pull_image(runtime: str, image: str, quiet: bool = False) -> bool:
         return False
 
 
+def format_size(size_bytes: int) -> str:
+    """Format file size in human-readable format."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}" if unit != 'B' else f"{size_bytes} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
+def format_duration(seconds: float) -> str:
+    """Format duration in human-readable format."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    if minutes < 60:
+        return f"{minutes}m {secs:.0f}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h {mins}m {secs:.0f}s"
+
+
+class Spinner:
+    """A simple spinner to show progress during long operations."""
+    
+    def __init__(self):
+        self.frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        self.running = False
+        self.thread = None
+        self.start_time = None
+    
+    def _spin(self):
+        idx = 0
+        while self.running:
+            elapsed = time.time() - self.start_time
+            frame = self.frames[idx % len(self.frames)]
+            print(f"\r{self.prefix} {frame} ({format_duration(elapsed)})", end="", flush=True)
+            idx += 1
+            time.sleep(0.1)
+    
+    def start(self, prefix: str = ""):
+        self.prefix = prefix
+        self.running = True
+        self.start_time = time.time()
+        self.thread = threading.Thread(target=self._spin, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.5)
+        # Clear the spinner line
+        print(f"\r{' ' * 80}\r", end="", flush=True)
+
+
 def run_container(
     runtime: str,
     image: str,
     input_file: Path,
     output_file: Path,
     mask_pii: bool = False,
-    quiet: bool = False,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, float]:
     """
     Run container to convert a single file.
     
@@ -279,11 +334,12 @@ def run_container(
         input_file: Absolute path to input file
         output_file: Absolute path to output file
         mask_pii: Whether to mask PII in images
-        quiet: Suppress progress output
         
     Returns:
-        Tuple of (success: bool, message: str)
+        Tuple of (success: bool, message: str, elapsed_seconds: float)
     """
+    start_time = time.time()
+    
     # Ensure output directory exists
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
@@ -314,21 +370,17 @@ def run_container(
             text=True,
             check=False,
         )
+        elapsed = time.time() - start_time
         
         if result.returncode == 0:
-            if not quiet:
-                print(f"Converted: {input_file} -> {output_file}")
-            return True, "success"
+            return True, "success", elapsed
         else:
             error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            if not quiet:
-                print(f"Failed: {input_file} - {error_msg}", file=sys.stderr)
-            return False, f"error: {error_msg}"
+            return False, error_msg, elapsed
             
     except OSError as e:
-        if not quiet:
-            print(f"Failed: {input_file} - {e}", file=sys.stderr)
-        return False, f"error: {e}"
+        elapsed = time.time() - start_time
+        return False, str(e), elapsed
 
 
 # =============================================================================
@@ -585,8 +637,11 @@ def main() -> int:
         print(f"No files found to convert in: {input_path}", file=sys.stderr)
         return 1
     
+    total_files = len(files_to_convert)
+    total_size = sum(f.stat().st_size for f in files_to_convert)
+    
     if not args.quiet:
-        print(f"Found {len(files_to_convert)} file(s) to convert")
+        print(f"Found {total_files} file(s) to convert ({format_size(total_size)})")
         print(f"Using runtime: {runtime}")
         print(f"Using image: {image}")
         print()
@@ -601,35 +656,54 @@ def main() -> int:
     success_count = 0
     skipped_count = 0
     failed_count = 0
+    conversion_start = time.time()
+    spinner = Spinner()
     
-    for input_file in files_to_convert:
+    for idx, input_file in enumerate(files_to_convert, 1):
         output_file = get_output_path(input_file, input_base, output_dir, args.flat)
+        file_size = input_file.stat().st_size
+        progress = f"[{idx}/{total_files}]"
         
         # Check if output exists and skip if not overwriting
         if output_file.exists() and not args.overwrite:
             if not args.quiet:
-                print(f"Skipped (exists): {input_file} -> {output_file}")
+                print(f"{progress} Skipped (exists): {input_file.name}")
             skipped_count += 1
             continue
         
-        success, result = run_container(
-            runtime, image, input_file, output_file, args.mask, args.quiet
+        # Show spinner while processing
+        if not args.quiet:
+            spinner.start(f"{progress} Processing: {input_file.name} ({format_size(file_size)})")
+        
+        success, result, elapsed = run_container(
+            runtime, image, input_file, output_file, args.mask
         )
+        
+        if not args.quiet:
+            spinner.stop()
         
         if success:
             success_count += 1
+            if not args.quiet:
+                print(f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})")
         else:
             failed_count += 1
+            if not args.quiet:
+                print(f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})")
+                print(f"    Error: {result}", file=sys.stderr)
+    
+    total_elapsed = time.time() - conversion_start
     
     # Print summary
     if not args.quiet:
         print()
         print("=" * 50)
         print("Conversion Summary:")
-        print(f"  Total files:     {len(files_to_convert)}")
+        print(f"  Total files:     {total_files}")
         print(f"  Successful:      {success_count}")
         print(f"  Skipped:         {skipped_count}")
         print(f"  Failed:          {failed_count}")
+        print(f"  Total time:      {format_duration(total_elapsed)}")
         print("=" * 50)
     
     # Return appropriate exit code
