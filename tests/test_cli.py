@@ -16,6 +16,8 @@ from mdify.cli import (
     _should_check_for_update,
     _update_last_check_time,
     check_for_update,
+    get_files_to_convert,
+    get_output_path,
 )
 
 
@@ -465,6 +467,146 @@ class TestVersionChecking:
         with patch("mdify.cli.urlopen", side_effect=URLError("Network error")):
             with pytest.raises(SystemExit) as exc_info:
                 check_for_update(force=True)
-        assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "Failed to check for updates" in captured.err
+            assert exc_info.value.code == 1
+            captured = capsys.readouterr()
+            assert "Failed to check for updates" in captured.err
+
+
+class TestFileHandling:
+    """Tests for file handling functions."""
+
+    # =========================================================================
+    # Tests for get_files_to_convert (8 tests)
+    # =========================================================================
+
+    def test_single_file(self, tmp_path):
+        """Test get_files_to_convert with single file."""
+        pdf_file = tmp_path / "doc.pdf"
+        pdf_file.touch()
+        result = get_files_to_convert(pdf_file, mask="*", recursive=False)
+        assert result == [pdf_file]
+
+    def test_directory_non_recursive(self, tmp_path):
+        """Test directory scan is non-recursive by default."""
+        (tmp_path / "doc1.pdf").touch()
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "doc2.pdf").touch()
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 1  # Only top-level doc1.pdf
+        assert result[0].name == "doc1.pdf"
+
+    def test_directory_recursive(self, tmp_path):
+        """Test directory scan with recursive flag."""
+        (tmp_path / "doc1.pdf").touch()
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "doc2.pdf").touch()
+        result = get_files_to_convert(tmp_path, mask="*", recursive=True)
+        assert len(result) == 2  # Both files
+
+    def test_glob_pattern(self, tmp_path):
+        """Test glob pattern filtering."""
+        (tmp_path / "doc.pdf").touch()
+        (tmp_path / "doc.docx").touch()
+        result = get_files_to_convert(tmp_path, mask="*.pdf", recursive=False)
+        assert len(result) == 1
+        assert result[0].name == "doc.pdf"
+
+    def test_hidden_files_excluded(self, tmp_path):
+        """Hidden files are excluded even if they have supported extensions."""
+        (tmp_path / "visible.pdf").touch()
+        (tmp_path / ".hidden.pdf").touch()  # Hidden file with supported extension
+        # Note: glob("*") doesn't match dotfiles, so .hidden.pdf won't be in initial set
+        # The function's explicit filter `not f.name.startswith(".")` is a safety net
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 1
+        assert result[0].name == "visible.pdf"
+
+    def test_unsupported_extensions_excluded(self, tmp_path):
+        """Files with unsupported extensions are filtered out."""
+        (tmp_path / "doc.pdf").touch()  # Supported
+        (tmp_path / "readme.txt").touch()  # NOT in SUPPORTED_EXTENSIONS
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 1
+        assert result[0].name == "doc.pdf"
+
+    def test_empty_directory(self, tmp_path):
+        """Test empty directory returns empty list."""
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert result == []
+
+    def test_nonexistent_path(self, tmp_path):
+        """Test nonexistent path raises FileNotFoundError."""
+        nonexistent = tmp_path / "does_not_exist"
+        with pytest.raises(FileNotFoundError):
+            get_files_to_convert(nonexistent, mask="*", recursive=False)
+
+    # =========================================================================
+    # Tests for get_output_path (5 tests)
+    # =========================================================================
+
+    def test_output_path_preserves_structure(self, tmp_path):
+        """Test output path preserves directory structure when flat=False."""
+        input_file = tmp_path / "input" / "sub" / "doc.pdf"
+        input_file.parent.mkdir(parents=True)
+        input_file.touch()
+        input_base = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = get_output_path(input_file, input_base, output_dir, flat=False)
+
+        assert result == output_dir / "sub" / "doc.md"
+
+    def test_output_path_flat_mode(self, tmp_path):
+        """Test output path with flat mode combines path separators."""
+        input_file = tmp_path / "input" / "sub" / "doc.pdf"
+        input_file.parent.mkdir(parents=True)
+        input_file.touch()
+        input_base = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = get_output_path(input_file, input_base, output_dir, flat=True)
+
+        assert result == output_dir / "sub_doc.md"
+
+    def test_output_path_flat_mode_root_file(self, tmp_path):
+        """Test output path with flat mode for file at root."""
+        input_file = tmp_path / "input" / "doc.pdf"
+        input_file.parent.mkdir(parents=True)
+        input_file.touch()
+        input_base = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = get_output_path(input_file, input_base, output_dir, flat=True)
+
+        assert result == output_dir / "doc.md"
+
+    def test_output_path_deeply_nested(self, tmp_path):
+        """Test output path with deeply nested directory structure in flat mode."""
+        input_file = tmp_path / "input" / "a" / "b" / "c" / "doc.pdf"
+        input_file.parent.mkdir(parents=True)
+        input_file.touch()
+        input_base = tmp_path / "input"
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = get_output_path(input_file, input_base, output_dir, flat=True)
+
+        assert result == output_dir / "a_b_c_doc.md"
+
+    def test_output_path_file_not_relative(self, tmp_path):
+        """Test output path when input file is outside input_base."""
+        input_file = tmp_path / "other" / "doc.pdf"
+        input_file.parent.mkdir(parents=True)
+        input_file.touch()
+        input_base = tmp_path / "base"
+        input_base.mkdir()
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+
+        result = get_output_path(input_file, input_base, output_dir, flat=False)
+
+        # Per mdify/cli.py:384, when relative_to fails, returns output_dir / f"{stem}.md"
+        assert result == output_dir / "doc.md"
