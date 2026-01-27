@@ -18,6 +18,8 @@ from mdify.cli import (
     check_for_update,
     get_files_to_convert,
     get_output_path,
+    check_image_exists,
+    pull_image,
 )
 
 
@@ -610,3 +612,105 @@ class TestFileHandling:
 
         # Per mdify/cli.py:384, when relative_to fails, returns output_dir / f"{stem}.md"
         assert result == output_dir / "doc.md"
+
+
+class TestContainerRuntime:
+    """Tests for container runtime functions."""
+
+    def test_image_exists_returns_true(self):
+        """Test check_image_exists returns True when image exists."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = check_image_exists("/usr/bin/docker", "test-image:latest")
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "image", "inspect", "test-image:latest"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_image_not_exists_returns_false(self):
+        """Test check_image_exists returns False when image doesn't exist."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = check_image_exists("/usr/bin/docker", "test-image:latest")
+        assert result is False
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "image", "inspect", "test-image:latest"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_image_check_oserror_returns_false(self):
+        """Test check_image_exists returns False on OSError."""
+        with patch(
+            "mdify.cli.subprocess.run", side_effect=OSError("Command not found")
+        ):
+            result = check_image_exists("/usr/bin/docker", "test-image:latest")
+        assert result is False
+
+    def test_pull_success(self):
+        """Test pull_image returns True on successful pull."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = pull_image("/usr/bin/docker", "test-image", quiet=True)
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "pull", "test-image"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_pull_failure(self):
+        """Test pull_image returns False on failed pull."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = pull_image("/usr/bin/docker", "test-image", quiet=True)
+        assert result is False
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "pull", "test-image"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_pull_quiet_mode(self):
+        """Test pull_image with quiet=True uses capture_output=True."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = pull_image("/usr/bin/docker", "test-image", quiet=True)
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "pull", "test-image"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_pull_verbose_mode(self, capsys):
+        """Test pull_image with quiet=False prints and uses capture_output=False."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = pull_image("/usr/bin/docker", "test-image", quiet=False)
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Pulling image: test-image" in captured.out
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "pull", "test-image"],
+            capture_output=False,
+            check=False,
+        )
+
+    def test_pull_oserror(self, capsys):
+        """Test pull_image returns False and prints error on OSError."""
+        with patch(
+            "mdify.cli.subprocess.run", side_effect=OSError("Command not found")
+        ):
+            result = pull_image("/usr/bin/docker", "test-image", quiet=False)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Error pulling image" in captured.err
