@@ -70,15 +70,32 @@ Recursively convert files:
 mdify /path/to/documents -r -g "*.pdf"
 ```
 
-### Masking sensitive content
+### GPU Acceleration
 
-Mask PII and sensitive content in images:
+For faster processing with NVIDIA GPU:
 ```bash
-mdify document.pdf -m
-mdify document.pdf --mask
+mdify --gpu documents/*.pdf
 ```
 
-This uses Docling's content-aware masking to obscure sensitive information in embedded images.
+Requires NVIDIA GPU with CUDA support and nvidia-container-toolkit.
+
+### ⚠️ PII Masking (Deprecated)
+
+The `--mask` flag is deprecated and will be ignored in this version. PII masking functionality was available in older versions using a custom runtime but is not supported with the current docling-serve backend.
+
+If PII masking is critical for your use case, please use mdify v1.5.x or earlier versions.
+
+## Performance
+
+mdify now uses docling-serve for significantly faster batch processing:
+
+- **Single model load**: Models are loaded once per session, not per file
+- **~10-20x speedup** for multiple file conversions compared to previous versions
+- **GPU acceleration**: Use `--gpu` for additional 2-6x speedup (requires NVIDIA GPU)
+
+### First Run Behavior
+
+The first conversion takes longer (~30-60s) as the container loads ML models into memory. Subsequent files in the same batch process quickly, typically in 1-3 seconds per file.
 
 ## Options
 
@@ -91,9 +108,11 @@ This uses Docling's content-aware masking to obscure sensitive information in em
 | `--flat` | Disable directory structure preservation |
 | `--overwrite` | Overwrite existing output files |
 | `-q, --quiet` | Suppress progress messages |
-| `-m, --mask` | Mask PII and sensitive content in images |
+| `-m, --mask` | ⚠️ **Deprecated**: PII masking not supported in current version |
+| `--gpu` | Use GPU-accelerated container (requires NVIDIA GPU and nvidia-container-toolkit) |
+| `--port PORT` | Container port (default: 5001) |
 | `--runtime RUNTIME` | Container runtime: docker or podman (auto-detected) |
-| `--image IMAGE` | Custom container image (default: ghcr.io/tiroq/mdify-runtime:latest) |
+| `--image IMAGE` | Custom container image (default: ghcr.io/docling-project/docling-serve-cpu:main) |
 | `--pull POLICY` | Image pull policy: always, missing, never (default: missing) |
 | `--check-update` | Check for available updates and exit |
 | `--version` | Show version and exit |
@@ -147,18 +166,21 @@ The CLI:
 - Pulls the runtime container on first use
 - Mounts files and runs conversions in the container
 
-## Container Image
+## Container Images
 
-The runtime container is hosted at:
+mdify uses official docling-serve containers:
+
+**CPU Version** (default):
 ```
-ghcr.io/tiroq/mdify-runtime:latest
+ghcr.io/docling-project/docling-serve-cpu:main
 ```
 
-To build locally:
-```bash
-cd runtime
-docker build -t mdify-runtime .
+**GPU Version** (use with `--gpu` flag):
 ```
+ghcr.io/docling-project/docling-serve-cu126:main
+```
+
+These are official images from the [docling-serve project](https://github.com/DS4SD/docling-serve).
 
 ## Updates
 
