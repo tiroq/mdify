@@ -499,6 +499,13 @@ Examples:
         help="Image pull policy: always, missing, never (default: missing)",
     )
 
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Conversion timeout in seconds (default: 1200, can be set via MDIFY_TIMEOUT env var)",
+    )
+
     # Utility options
     parser.add_argument(
         "--check-update",
@@ -531,6 +538,9 @@ def main() -> int:
 
     # Check for updates (daily, silent on errors)
     check_for_update(force=False)
+
+    # Resolve timeout value: CLI > env > default 1200
+    timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
 
     # Validate input is provided
     if args.input is None:
@@ -628,7 +638,7 @@ def main() -> int:
             print(f"Starting docling-serve container...")
             print()
 
-        with DoclingContainer(runtime, image, args.port) as container:
+        with DoclingContainer(runtime, image, args.port, timeout=timeout) as container:
             # Convert files
             conversion_start = time.time()
             spinner = Spinner()

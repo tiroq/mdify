@@ -20,17 +20,19 @@ class DoclingContainer:
         # Container automatically stopped and removed
     """
 
-    def __init__(self, runtime: str, image: str, port: int = 5001):
+    def __init__(self, runtime: str, image: str, port: int = 5001, timeout: int = 1200):
         """Initialize container manager.
 
         Args:
             runtime: Container runtime ("docker" or "podman")
             image: Container image to use
             port: Host port to bind (default: 5001)
+            timeout: Conversion timeout in seconds (default: 1200)
         """
         self.runtime = runtime
         self.image = image
         self.port = port
+        self.timeout = timeout
         self.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
         self.container_id: Optional[str] = None
 
@@ -59,6 +61,8 @@ class DoclingContainer:
             self.container_name,
             "-p",
             f"{self.port}:5001",
+            "-e",
+            f"DOCLING_SERVE_MAX_SYNC_WAIT={self.timeout}",
             self.image,
         ]
 
