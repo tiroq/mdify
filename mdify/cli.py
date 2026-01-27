@@ -21,6 +21,8 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from . import __version__
+from mdify.container import DoclingContainer
+from mdify.docling_client import convert_file
 
 # Configuration
 MDIFY_HOME = Path.home() / ".mdify"
@@ -29,7 +31,8 @@ PYPI_API_URL = "https://pypi.org/pypi/mdify-cli/json"
 CHECK_INTERVAL_SECONDS = 86400  # 24 hours
 
 # Container configuration
-DEFAULT_IMAGE = "ghcr.io/tiroq/mdify-runtime:latest"
+DEFAULT_IMAGE = "ghcr.io/docling-project/docling-serve-cpu:main"
+GPU_IMAGE = "ghcr.io/docling-project/docling-serve-cu126:main"
 SUPPORTED_RUNTIMES = ("docker", "podman")
 
 
@@ -288,79 +291,6 @@ class Spinner:
         print(f"\r{' ' * 80}\r", end="", flush=True)
 
 
-def run_container(
-    runtime: str,
-    image: str,
-    input_file: Path,
-    output_file: Path,
-    mask_pii: bool = False,
-) -> Tuple[bool, str, float]:
-    """
-    Run container to convert a single file.
-
-    Args:
-        runtime: Path to container runtime
-        image: Image name/tag
-        input_file: Absolute path to input file
-        output_file: Absolute path to output file
-        mask_pii: Whether to mask PII in images
-
-    Returns:
-        Tuple of (success: bool, message: str, elapsed_seconds: float)
-    """
-    start_time = time.time()
-
-    # Ensure output directory exists
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Mount directories
-    input_dir = input_file.parent
-    output_dir = output_file.parent
-
-    # Container paths
-    container_in = f"/work/in/{input_file.name}"
-    container_out = f"/work/out/{output_file.name}"
-
-    cmd = [
-        runtime,
-        "run",
-        "--rm",
-        "-v",
-        f"{input_dir}:/work/in:ro",
-        "-v",
-        f"{output_dir}:/work/out",
-        image,
-        "--in",
-        container_in,
-        "--out",
-        container_out,
-    ]
-
-    if mask_pii:
-        cmd.append("--mask")
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        elapsed = time.time() - start_time
-
-        if result.returncode == 0:
-            return True, "success", elapsed
-        else:
-            error_msg = (
-                result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            )
-            return False, error_msg, elapsed
-
-    except OSError as e:
-        elapsed = time.time() - start_time
-        return False, str(e), elapsed
-
-
 # =============================================================================
 # File handling functions
 # =============================================================================
@@ -532,6 +462,19 @@ Examples:
         help="Mask PII and sensitive content in document images",
     )
 
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Use GPU-accelerated container image (docling-serve-cu126)",
+    )
+
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5001,
+        help="Port for docling-serve container (default: 5001)",
+    )
+
     # Container options
     parser.add_argument(
         "--runtime",
@@ -609,7 +552,14 @@ def main() -> int:
         return 2
 
     # Handle image pull policy
-    image = args.image
+    # Determine image based on --gpu flag
+    if args.gpu:
+        image = GPU_IMAGE
+    elif args.image:
+        image = args.image
+    else:
+        image = DEFAULT_IMAGE
+
     image_exists = check_image_exists(runtime, image)
 
     if args.pull == "always" or (args.pull == "missing" and not image_exists):
@@ -650,55 +600,88 @@ def main() -> int:
         print(f"Using image: {image}")
         print()
 
+    if args.mask:
+        print(
+            "Warning: --mask is not supported with docling-serve and will be ignored",
+            file=sys.stderr,
+        )
+
     # Determine input base for directory structure preservation
     if input_path.is_file():
         input_base = input_path.parent
     else:
         input_base = input_path
 
-    # Convert files
-    success_count = 0
-    skipped_count = 0
-    failed_count = 0
-    conversion_start = time.time()
-    spinner = Spinner()
+    # Start docling-serve container
+    if not args.quiet:
+        print(f"Starting docling-serve container...")
+        print()
 
-    for idx, input_file in enumerate(files_to_convert, 1):
-        output_file = get_output_path(input_file, input_base, output_dir, args.flat)
-        file_size = input_file.stat().st_size
-        progress = f"[{idx}/{total_files}]"
+    with DoclingContainer(runtime, image, args.port) as container:
+        # Convert files
+        success_count = 0
+        skipped_count = 0
+        failed_count = 0
+        conversion_start = time.time()
+        spinner = Spinner()
 
-        # Check if output exists and skip if not overwriting
-        if output_file.exists() and not args.overwrite:
+        for idx, input_file in enumerate(files_to_convert, 1):
+            output_file = get_output_path(input_file, input_base, output_dir, args.flat)
+            file_size = input_file.stat().st_size
+            progress = f"[{idx}/{total_files}]"
+
+            # Check if output exists and skip if not overwriting
+            if output_file.exists() and not args.overwrite:
+                if not args.quiet:
+                    print(f"{progress} Skipped (exists): {input_file.name}")
+                skipped_count += 1
+                continue
+
+            # Ensure output directory exists
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            # Show spinner while processing
             if not args.quiet:
-                print(f"{progress} Skipped (exists): {input_file.name}")
-            skipped_count += 1
-            continue
+                spinner.start(
+                    f"{progress} Processing: {input_file.name} ({format_size(file_size)})"
+                )
 
-        # Show spinner while processing
-        if not args.quiet:
-            spinner.start(
-                f"{progress} Processing: {input_file.name} ({format_size(file_size)})"
-            )
+            start_time = time.time()
+            try:
+                # Convert via HTTP API
+                result = convert_file(container.base_url, input_file, to_format="md")
+                elapsed = time.time() - start_time
 
-        success, result, elapsed = run_container(
-            runtime, image, input_file, output_file, args.mask
-        )
+                if not args.quiet:
+                    spinner.stop()
 
-        if not args.quiet:
-            spinner.stop()
+                if result.success:
+                    # Write result to output file
+                    output_file.write_text(result.content)
+                    success_count += 1
+                    if not args.quiet:
+                        print(
+                            f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})"
+                        )
+                else:
+                    failed_count += 1
+                    error_msg = result.error or "Unknown error"
+                    if not args.quiet:
+                        print(
+                            f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                        )
+                        print(f"    Error: {error_msg}", file=sys.stderr)
+            except Exception as e:
+                elapsed = time.time() - start_time
+                failed_count += 1
+                if not args.quiet:
+                    spinner.stop()
+                    print(
+                        f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                    )
+                    print(f"    Error: {str(e)}", file=sys.stderr)
 
-        if success:
-            success_count += 1
-            if not args.quiet:
-                print(f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})")
-        else:
-            failed_count += 1
-            if not args.quiet:
-                print(f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})")
-                print(f"    Error: {result}", file=sys.stderr)
-
-    total_elapsed = time.time() - conversion_start
+        total_elapsed = time.time() - conversion_start
 
     # Print summary
     if not args.quiet:
