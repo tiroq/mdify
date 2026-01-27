@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: Text Processing :: Markup :: Markdown",
     "Topic :: Utilities",
 ]
-dependencies = []
+dependencies = ["requests"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
