@@ -1,6 +1,7 @@
 """Tests for mdify CLI runtime detection."""
 
 import sys
+from pathlib import Path
 from unittest.mock import patch, Mock
 import pytest
 
@@ -135,3 +136,50 @@ class TestNewCLIArgs:
         with patch.object(sys, "argv", ["mdify", "--port", "65535", "test.pdf"]):
             args = parse_args()
             assert args.port == 65535
+
+
+class TestPathResolution:
+    """Tests for path resolution error handling."""
+
+    def test_input_path_permission_error_fallback(self, tmp_path):
+        """Test that PermissionError on resolve() falls back to absolute()."""
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        original_resolve = Path.resolve
+
+        def mock_resolve(self, strict=False):
+            if "test.pdf" in str(self):
+                raise PermissionError("Operation not permitted")
+            return original_resolve(self, strict=strict)
+
+        with patch.object(Path, "resolve", mock_resolve):
+            with patch.object(sys, "argv", ["mdify", str(test_file)]):
+                with patch("mdify.cli.detect_runtime", return_value=None):
+                    from mdify.cli import main
+
+                    result = main()
+                    assert result == 1
+
+    def test_output_path_permission_error_fallback(self, tmp_path):
+        """Test that PermissionError on output path resolve() falls back to absolute()."""
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+        output_dir = tmp_path / "output"
+
+        original_resolve = Path.resolve
+
+        def mock_resolve(self, strict=False):
+            if "output" in str(self):
+                raise PermissionError("Operation not permitted")
+            return original_resolve(self, strict=strict)
+
+        with patch.object(Path, "resolve", mock_resolve):
+            with patch.object(
+                sys, "argv", ["mdify", str(test_file), "-o", str(output_dir)]
+            ):
+                with patch("mdify.cli.detect_runtime", return_value=None):
+                    from mdify.cli import main
+
+                    result = main()
+                    assert result == 1

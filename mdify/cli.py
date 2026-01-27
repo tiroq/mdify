@@ -571,9 +571,15 @@ def main() -> int:
         print(f"Run with --pull=missing or pull manually: {preferred} pull {image}")
         return 1
 
-    # Resolve paths
-    input_path = Path(args.input).resolve()
-    output_dir = Path(args.out_dir).resolve()
+    # Resolve paths (use absolute() as fallback if resolve() fails due to permissions)
+    try:
+        input_path = Path(args.input).resolve()
+    except PermissionError:
+        input_path = Path(args.input).absolute()
+    try:
+        output_dir = Path(args.out_dir).resolve()
+    except PermissionError:
+        output_dir = Path(args.out_dir).absolute()
 
     # Validate input
     if not input_path.exists():
