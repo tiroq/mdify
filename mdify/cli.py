@@ -612,88 +612,103 @@ def main() -> int:
     else:
         input_base = input_path
 
-    # Start docling-serve container
-    if not args.quiet:
-        print(f"Starting docling-serve container...")
-        print()
+    success_count = 0
+    skipped_count = 0
+    failed_count = 0
+    total_elapsed = 0.0
 
-    with DoclingContainer(runtime, image, args.port) as container:
-        # Convert files
-        success_count = 0
-        skipped_count = 0
-        failed_count = 0
-        conversion_start = time.time()
-        spinner = Spinner()
+    try:
+        if not args.quiet:
+            print(f"Starting docling-serve container...")
+            print()
 
-        for idx, input_file in enumerate(files_to_convert, 1):
-            output_file = get_output_path(input_file, input_base, output_dir, args.flat)
-            file_size = input_file.stat().st_size
-            progress = f"[{idx}/{total_files}]"
+        with DoclingContainer(runtime, image, args.port) as container:
+            # Convert files
+            conversion_start = time.time()
+            spinner = Spinner()
 
-            # Check if output exists and skip if not overwriting
-            if output_file.exists() and not args.overwrite:
-                if not args.quiet:
-                    print(f"{progress} Skipped (exists): {input_file.name}")
-                skipped_count += 1
-                continue
-
-            # Ensure output directory exists
-            output_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Show spinner while processing
-            if not args.quiet:
-                spinner.start(
-                    f"{progress} Processing: {input_file.name} ({format_size(file_size)})"
+            for idx, input_file in enumerate(files_to_convert, 1):
+                output_file = get_output_path(
+                    input_file, input_base, output_dir, args.flat
                 )
+                file_size = input_file.stat().st_size
+                progress = f"[{idx}/{total_files}]"
 
-            start_time = time.time()
-            try:
-                # Convert via HTTP API
-                result = convert_file(container.base_url, input_file, to_format="md")
-                elapsed = time.time() - start_time
+                # Check if output exists and skip if not overwriting
+                if output_file.exists() and not args.overwrite:
+                    if not args.quiet:
+                        print(f"{progress} Skipped (exists): {input_file.name}")
+                    skipped_count += 1
+                    continue
 
+                # Ensure output directory exists
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # Show spinner while processing
                 if not args.quiet:
-                    spinner.stop()
+                    spinner.start(
+                        f"{progress} Processing: {input_file.name} ({format_size(file_size)})"
+                    )
 
-                if result.success:
-                    # Write result to output file
-                    output_file.write_text(result.content)
-                    success_count += 1
+                start_time = time.time()
+                try:
+                    # Convert via HTTP API
+                    result = convert_file(
+                        container.base_url, input_file, to_format="md"
+                    )
+                    elapsed = time.time() - start_time
+
                     if not args.quiet:
-                        print(
-                            f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})"
-                        )
-                else:
+                        spinner.stop()
+
+                    if result.success:
+                        # Write result to output file
+                        output_file.write_text(result.content)
+                        success_count += 1
+                        if not args.quiet:
+                            print(
+                                f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})"
+                            )
+                    else:
+                        failed_count += 1
+                        error_msg = result.error or "Unknown error"
+                        if not args.quiet:
+                            print(
+                                f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                            )
+                            print(f"    Error: {error_msg}", file=sys.stderr)
+                except Exception as e:
+                    elapsed = time.time() - start_time
                     failed_count += 1
-                    error_msg = result.error or "Unknown error"
                     if not args.quiet:
+                        spinner.stop()
                         print(
                             f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                         )
-                        print(f"    Error: {error_msg}", file=sys.stderr)
-            except Exception as e:
-                elapsed = time.time() - start_time
-                failed_count += 1
-                if not args.quiet:
-                    spinner.stop()
-                    print(
-                        f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
-                    )
-                    print(f"    Error: {str(e)}", file=sys.stderr)
+                        print(f"    Error: {str(e)}", file=sys.stderr)
 
-        total_elapsed = time.time() - conversion_start
+            total_elapsed = time.time() - conversion_start
 
-    # Print summary
-    if not args.quiet:
-        print()
-        print("=" * 50)
-        print("Conversion Summary:")
-        print(f"  Total files:     {total_files}")
-        print(f"  Successful:      {success_count}")
-        print(f"  Skipped:         {skipped_count}")
-        print(f"  Failed:          {failed_count}")
-        print(f"  Total time:      {format_duration(total_elapsed)}")
-        print("=" * 50)
+        # Print summary
+        if not args.quiet:
+            print()
+            print("=" * 50)
+            print("Conversion Summary:")
+            print(f"  Total files:     {total_files}")
+            print(f"  Successful:      {success_count}")
+            print(f"  Skipped:         {skipped_count}")
+            print(f"  Failed:          {failed_count}")
+            print(f"  Total time:      {format_duration(total_elapsed)}")
+            print("=" * 50)
+
+    except KeyboardInterrupt:
+        if not args.quiet:
+            print("\n\nInterrupted by user. Container stopped.")
+            if success_count > 0 or skipped_count > 0 or failed_count > 0:
+                print(
+                    f"Partial progress: {success_count} successful, {failed_count} failed, {skipped_count} skipped"
+                )
+        return 130
 
     # Return appropriate exit code
     if failed_count > 0:
