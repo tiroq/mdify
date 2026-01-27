@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, Mock
 import pytest
+from urllib.error import URLError
 
 from mdify.cli import (
     detect_runtime,
@@ -11,7 +12,26 @@ from mdify.cli import (
     format_size,
     format_duration,
     _compare_versions,
+    _get_remote_version,
+    _should_check_for_update,
+    _update_last_check_time,
+    check_for_update,
 )
+
+
+@pytest.fixture
+def isolated_mdify_home(tmp_path, monkeypatch):
+    """Redirect MDIFY_HOME and LAST_CHECK_FILE to tmp_path.
+
+    This MUST be used for any test that could trigger _update_last_check_time(),
+    which includes ALL check_for_update() tests EXCEPT when the function
+    returns early due to MDIFY_NO_UPDATE_CHECK=1.
+    """
+    fake_home = tmp_path / ".mdify"
+    fake_last_check = fake_home / ".last_check"
+    monkeypatch.setattr("mdify.cli.MDIFY_HOME", fake_home)
+    monkeypatch.setattr("mdify.cli.LAST_CHECK_FILE", fake_last_check)
+    return fake_home, fake_last_check
 
 
 class TestDetectRuntime:
@@ -279,3 +299,172 @@ class TestVersionComparison:
         """Test that invalid remote version returns False (graceful failure)."""
         result = _compare_versions("1.0.0", "invalid")
         assert result is False
+
+
+class TestVersionChecking:
+    """Tests for version checking functions."""
+
+    # =========================================================================
+    # _get_remote_version tests (4 tests)
+    # =========================================================================
+
+    def test_get_remote_version_success(self):
+        """Test successful version fetch from PyPI."""
+        mock_response = Mock()
+        mock_response.read.return_value = b'{"info": {"version": "1.2.3"}}'
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            result = _get_remote_version()
+        assert result == "1.2.3"
+
+    def test_get_remote_version_timeout(self):
+        """Test timeout handling returns None."""
+        with patch("mdify.cli.urlopen", side_effect=URLError("timeout")):
+            result = _get_remote_version()
+        assert result is None
+
+    def test_get_remote_version_invalid_json(self):
+        """Test invalid JSON response returns None."""
+        mock_response = Mock()
+        mock_response.read.return_value = b"not json"
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            result = _get_remote_version()
+        assert result is None
+
+    def test_get_remote_version_missing_version(self):
+        """Test missing version key returns None."""
+        mock_response = Mock()
+        mock_response.read.return_value = b'{"info": {}}'
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            result = _get_remote_version()
+        assert result is None
+
+    # =========================================================================
+    # _should_check_for_update tests (5 tests)
+    # =========================================================================
+
+    def test_should_check_env_disabled(self, monkeypatch):
+        """Test returns False when MDIFY_NO_UPDATE_CHECK=1."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        result = _should_check_for_update()
+        assert result is False
+
+    def test_should_check_no_file(self, isolated_mdify_home):
+        """Test returns True when .last_check doesn't exist."""
+        result = _should_check_for_update()
+        assert result is True
+
+    def test_should_check_recent(self, isolated_mdify_home):
+        """Test returns False when last check was recent (< 24h)."""
+        fake_home, fake_last_check = isolated_mdify_home
+        fake_home.mkdir(parents=True)
+        fake_last_check.write_text("1000000")  # timestamp in past
+        with patch("mdify.cli.time.time", return_value=1000000 + 3600):  # 1 hour later
+            result = _should_check_for_update()
+        assert result is False  # Less than CHECK_INTERVAL_SECONDS (86400)
+
+    def test_should_check_old(self, isolated_mdify_home):
+        """Test returns True when last check was > 24h ago."""
+        fake_home, fake_last_check = isolated_mdify_home
+        fake_home.mkdir(parents=True)
+        fake_last_check.write_text("1000000")  # timestamp in past
+        with patch("mdify.cli.time.time", return_value=1000000 + 90000):  # 25h later
+            result = _should_check_for_update()
+        assert result is True
+
+    def test_should_check_corrupted_file(self, isolated_mdify_home):
+        """Test returns True when .last_check contains invalid data."""
+        fake_home, fake_last_check = isolated_mdify_home
+        fake_home.mkdir(parents=True)
+        fake_last_check.write_text("garbage")  # invalid timestamp
+        result = _should_check_for_update()
+        assert result is True
+
+    # =========================================================================
+    # _update_last_check_time tests (2 tests)
+    # =========================================================================
+
+    def test_update_last_check_creates_file(self, isolated_mdify_home):
+        """Test creates .last_check file with correct timestamp."""
+        fake_home, fake_last_check = isolated_mdify_home
+        known_time = 1234567890.123
+        with patch("mdify.cli.time.time", return_value=known_time):
+            _update_last_check_time()
+        assert fake_last_check.exists()
+        content = fake_last_check.read_text()
+        assert float(content) == known_time
+
+    def test_update_last_check_oserror_no_crash(self, isolated_mdify_home):
+        """Test that OSError on mkdir doesn't crash the function."""
+        with patch.object(Path, "mkdir", side_effect=OSError("Permission denied")):
+            # Should not raise - function catches OSError
+            _update_last_check_time()
+        # Function returns None on error, test passes if no exception
+
+    # =========================================================================
+    # check_for_update tests (5 tests)
+    # =========================================================================
+
+    def test_check_for_update_skip_check(self, monkeypatch):
+        """Test check is skipped when MDIFY_NO_UPDATE_CHECK=1."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        with patch("mdify.cli.urlopen") as mock_urlopen:
+            check_for_update(force=False)
+        mock_urlopen.assert_not_called()  # Should skip network call
+
+    def test_check_for_update_newer_available(
+        self, isolated_mdify_home, capsys, monkeypatch
+    ):
+        """Test prints update message when newer version available."""
+        monkeypatch.setattr("mdify.cli.__version__", "1.0.0")
+        mock_response = Mock()
+        mock_response.read.return_value = b'{"info": {"version": "2.0.0"}}'
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            check_for_update(force=True)
+        captured = capsys.readouterr()
+        assert "A new version" in captured.out
+        assert "2.0.0" in captured.out
+
+    def test_check_for_update_up_to_date_silent(
+        self, isolated_mdify_home, capsys, monkeypatch
+    ):
+        """Test no output when force=False and versions match."""
+        monkeypatch.setattr("mdify.cli.__version__", "1.0.0")
+        mock_response = Mock()
+        mock_response.read.return_value = b'{"info": {"version": "1.0.0"}}'
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            check_for_update(force=False)
+        captured = capsys.readouterr()
+        assert captured.out == ""  # No output when force=False and up to date
+
+    def test_check_for_update_force_shows_current(
+        self, isolated_mdify_home, capsys, monkeypatch
+    ):
+        """Test prints 'up to date' message when force=True and versions match."""
+        monkeypatch.setattr("mdify.cli.__version__", "1.0.0")
+        mock_response = Mock()
+        mock_response.read.return_value = b'{"info": {"version": "1.0.0"}}'
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        with patch("mdify.cli.urlopen", return_value=mock_response):
+            check_for_update(force=True)
+        captured = capsys.readouterr()
+        assert "up to date" in captured.out
+
+    def test_check_for_update_force_network_error(self, capsys):
+        """Test sys.exit(1) when force=True and network error."""
+        with patch("mdify.cli.urlopen", side_effect=URLError("Network error")):
+            with pytest.raises(SystemExit) as exc_info:
+                check_for_update(force=True)
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Failed to check for updates" in captured.err
