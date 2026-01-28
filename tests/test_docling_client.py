@@ -356,3 +356,97 @@ class TestDoclingHTTPError:
         error = DoclingHTTPError(400, "Bad Request")
 
         assert isinstance(error, Exception)
+
+
+class TestMimeTypeDetection:
+    """Test MIME type detection in file conversion."""
+
+    def test_convert_file_sends_correct_mime_for_xlsx(self, tmp_path):
+        """Test that .xlsx files are sent with correct MIME type."""
+        test_file = tmp_path / "test.xlsx"
+        test_file.write_bytes(b"fake xlsx content")
+
+        with patch("mdify.docling_client.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {"content": "# Test Spreadsheet\n\nContent here."}
+            ]
+            mock_post.return_value = mock_response
+
+            convert_file("http://localhost:5001", test_file)
+
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            files_param = call_args[1]["files"]
+            filename, file_obj, mime_type = files_param["files"]
+            assert (
+                mime_type
+                == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+    def test_convert_file_sends_correct_mime_for_pdf(self, tmp_path):
+        """Test that .pdf files are sent with correct MIME type (regression test)."""
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf content")
+
+        with patch("mdify.docling_client.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {"content": "# Test Document\n\nContent here."}
+            ]
+            mock_post.return_value = mock_response
+
+            convert_file("http://localhost:5001", test_file)
+
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            files_param = call_args[1]["files"]
+            filename, file_obj, mime_type = files_param["files"]
+            assert mime_type == "application/pdf"
+
+    def test_convert_file_sends_correct_mime_for_docx(self, tmp_path):
+        """Test that .docx files are sent with correct MIME type."""
+        test_file = tmp_path / "test.docx"
+        test_file.write_bytes(b"fake docx content")
+
+        with patch("mdify.docling_client.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {"content": "# Test Document\n\nContent here."}
+            ]
+            mock_post.return_value = mock_response
+
+            convert_file("http://localhost:5001", test_file)
+
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            files_param = call_args[1]["files"]
+            filename, file_obj, mime_type = files_param["files"]
+            assert (
+                mime_type
+                == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+
+    def test_convert_file_fallback_for_unknown_extension(self, tmp_path):
+        """Test that unknown file extensions fall back to application/octet-stream."""
+        test_file = tmp_path / "test.xyz"
+        test_file.write_bytes(b"fake unknown content")
+
+        with patch("mdify.docling_client.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [
+                {"content": "# Test Content\n\nContent here."}
+            ]
+            mock_post.return_value = mock_response
+
+            convert_file("http://localhost:5001", test_file)
+
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            files_param = call_args[1]["files"]
+            filename, file_obj, mime_type = files_param["files"]
+            assert mime_type == "application/octet-stream"
