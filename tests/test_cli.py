@@ -796,7 +796,6 @@ class TestGetStorageRoot:
     def test_podman_storage_root_success(self):
         """Test get_storage_root returns Podman storage root on success."""
         from mdify.cli import get_storage_root
-        import json
 
         podman_output = json.dumps(
             {"store": {"graphRoot": "/var/lib/containers/storage"}}
@@ -830,6 +829,49 @@ class TestGetStorageRoot:
             "mdify.cli.subprocess.run", side_effect=OSError("Command not found")
         ):
             result = get_storage_root("docker")
+        assert result is None
+
+    def test_docker_storage_root_with_full_path(self):
+        """Test get_storage_root works with full path to Docker executable."""
+        from mdify.cli import get_storage_root
+
+        mock_result = Mock()
+        mock_result.stdout = b"/var/lib/docker\n"
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = get_storage_root("/usr/bin/docker")
+        assert result == "/var/lib/docker"
+        mock_run.assert_called_once_with(
+            ["/usr/bin/docker", "system", "info", "--format", "{{.DockerRootDir}}"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_podman_storage_root_with_full_path(self):
+        """Test get_storage_root works with full path to Podman executable."""
+        from mdify.cli import get_storage_root
+
+        podman_output = json.dumps(
+            {"store": {"graphRoot": "/var/lib/containers/storage"}}
+        )
+        mock_result = Mock()
+        mock_result.stdout = podman_output.encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = get_storage_root("/usr/local/bin/podman")
+        assert result == "/var/lib/containers/storage"
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/podman", "info", "--format", "json"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_podman_storage_root_invalid_json(self):
+        """Test get_storage_root returns None when Podman returns invalid JSON."""
+        from mdify.cli import get_storage_root
+
+        mock_result = Mock()
+        mock_result.stdout = b"invalid json {{"
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_storage_root("podman")
         assert result is None
 
 
@@ -967,7 +1009,7 @@ class TestSpaceCheckIntegration:
                         with patch("mdify.cli.DoclingContainer"):
                             from mdify.cli import main
 
-                            result = main()
+                            main()
                             # Space check should NOT run because pull=never
                             mock_storage.assert_not_called()
 
@@ -984,7 +1026,7 @@ class TestSpaceCheckIntegration:
                         with patch("mdify.cli.DoclingContainer"):
                             from mdify.cli import main
 
-                            result = main()
+                            main()
                             # Space check should NOT run because image exists
                             mock_storage.assert_not_called()
 
@@ -1016,7 +1058,7 @@ class TestSpaceCheckIntegration:
                                         with patch("mdify.cli.DoclingContainer"):
                                             from mdify.cli import main
 
-                                            result = main()
+                                            main()
                                             captured = capsys.readouterr()
                                             assert (
                                                 "Not enough free disk space"
@@ -1052,7 +1094,7 @@ class TestSpaceCheckIntegration:
                                         with patch("mdify.cli.DoclingContainer"):
                                             from mdify.cli import main
 
-                                            result = main()
+                                            main()
                                             captured = capsys.readouterr()
                                             assert (
                                                 "Less than 1 GB would remain"
@@ -1087,7 +1129,7 @@ class TestSpaceCheckIntegration:
                                         with patch("mdify.cli.DoclingContainer"):
                                             from mdify.cli import main
 
-                                            result = main()
+                                            main()
                                             # confirm_proceed should NOT be called with --yes
                                             mock_confirm.assert_not_called()
 

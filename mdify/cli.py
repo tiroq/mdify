@@ -305,13 +305,16 @@ def get_storage_root(runtime: str) -> Optional[str]:
     Get the storage root directory for Docker or Podman.
 
     Args:
-        runtime: Container runtime name ('docker' or 'podman')
+        runtime: Path to container runtime executable
 
     Returns:
         Storage root path as string, or None if command fails.
     """
     try:
-        if runtime == "docker":
+        # Extract runtime name from path (e.g., /usr/bin/docker -> docker)
+        runtime_name = os.path.basename(runtime)
+        
+        if runtime_name == "docker":
             result = subprocess.run(
                 [runtime, "system", "info", "--format", "{{.DockerRootDir}}"],
                 capture_output=True,
@@ -319,7 +322,7 @@ def get_storage_root(runtime: str) -> Optional[str]:
             )
             if result.stdout:
                 return result.stdout.decode().strip()
-        elif runtime == "podman":
+        elif runtime_name == "podman":
             result = subprocess.run(
                 [runtime, "info", "--format", "json"],
                 capture_output=True,
@@ -329,7 +332,7 @@ def get_storage_root(runtime: str) -> Optional[str]:
                 info = json.loads(result.stdout.decode())
                 return info.get("store", {}).get("graphRoot")
         return None
-    except OSError:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
