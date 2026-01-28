@@ -1,6 +1,6 @@
 [project]
 name = "mdify-cli"
-version = "2.3.0"
+version = "2.5.0"
 description = "Convert PDFs and document images into structured Markdown for LLM workflows"
 readme = "README.md"
 requires-python = ">=3.8"
