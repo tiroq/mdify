@@ -333,6 +333,27 @@ def get_storage_root(runtime: str) -> Optional[str]:
         return None
 
 
+def confirm_proceed(message: str, default_no: bool = True) -> bool:
+    """
+    Prompt user for confirmation with a y/N prompt.
+    
+    Args:
+        message: The confirmation message to display
+        default_no: If True, shows [y/N] (default no). If False, shows [Y/n] (default yes)
+    
+    Returns:
+        True if user entered 'y' or 'Y', False otherwise.
+        Returns False immediately if stdin is not a TTY (non-interactive).
+    """
+    if not sys.stdin.isatty():
+        return False
+    
+    prompt = "[y/N]" if default_no else "[Y/n]"
+    print(f"{message} {prompt}", file=sys.stderr)
+    response = input()
+    return response.lower() == 'y'
+
+
 class Spinner:
     """A simple spinner to show progress during long operations."""
 
