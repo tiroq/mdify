@@ -432,7 +432,7 @@ class TestMimeTypeDetection:
 
     def test_convert_file_fallback_for_unknown_extension(self, tmp_path):
         """Test that unknown file extensions fall back to application/octet-stream."""
-        test_file = tmp_path / "test.xyz"
+        test_file = tmp_path / "test.unknownext123"
         test_file.write_bytes(b"fake unknown content")
 
         with patch("mdify.docling_client.requests.post") as mock_post:

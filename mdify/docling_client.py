@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import mimetypes
+
 import requests
 
 
@@ -38,6 +40,12 @@ class DoclingHTTPError(DoclingClientError):
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         super().__init__(f"HTTP {status_code}: {message}")
+
+
+def _get_mime_type(file_path: Path) -> str:
+    """Get MIME type for file, with fallback for unknown types."""
+    mime_type, _ = mimetypes.guess_type(str(file_path))
+    return mime_type or "application/octet-stream"
 
 
 def check_health(base_url: str) -> bool:
@@ -77,7 +85,7 @@ def convert_file(
         with open(file_path, "rb") as f:
             response = requests.post(
                 f"{base_url}/v1/convert/file",
-                files={"files": (file_path.name, f, "application/pdf")},
+                files={"files": (file_path.name, f, _get_mime_type(file_path))},
                 data={"to_formats": to_format, "do_ocr": str(do_ocr).lower()},
             )
 
@@ -126,7 +134,7 @@ def convert_file_async(
         with open(file_path, "rb") as f:
             response = requests.post(
                 f"{base_url}/v1/convert/file/async",
-                files={"files": (file_path.name, f, "application/pdf")},
+                files={"files": (file_path.name, f, _get_mime_type(file_path))},
                 data={"to_formats": to_format, "do_ocr": str(do_ocr).lower()},
             )
 
