@@ -336,22 +336,22 @@ def get_storage_root(runtime: str) -> Optional[str]:
 def confirm_proceed(message: str, default_no: bool = True) -> bool:
     """
     Prompt user for confirmation with a y/N prompt.
-    
+
     Args:
         message: The confirmation message to display
         default_no: If True, shows [y/N] (default no). If False, shows [Y/n] (default yes)
-    
+
     Returns:
         True if user entered 'y' or 'Y', False otherwise.
         Returns False immediately if stdin is not a TTY (non-interactive).
     """
     if not sys.stdin.isatty():
         return False
-    
+
     prompt = "[y/N]" if default_no else "[Y/n]"
     print(f"{message} {prompt}", file=sys.stderr)
     response = input()
-    return response.lower() == 'y'
+    return response.lower() == "y"
 
 
 class Spinner:
@@ -678,6 +678,70 @@ def main() -> int:
         image = DEFAULT_IMAGE
 
     image_exists = check_image_exists(runtime, image)
+
+    # NOTE: Docker Desktop on macOS/Windows uses a VM, so disk space checks may not
+    # accurately reflect available space in the container's filesystem. Remote Docker
+    # daemons (DOCKER_HOST) are also not supported. In these cases, the check will
+    # gracefully degrade (warn and proceed).
+
+    # Check disk space before pulling image (skip if pull=never or image exists with pull=missing)
+    will_pull = args.pull == "always" or (args.pull == "missing" and not image_exists)
+    if will_pull:
+        storage_root = get_storage_root(runtime)
+        if storage_root:
+            image_size = get_image_size_estimate(runtime, image)
+            if image_size:
+                free_space = get_free_space(storage_root)
+                if free_space < image_size:
+                    print(
+                        f"Warning: Not enough free disk space on {storage_root}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Available: {format_size(free_space)}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Required:  {format_size(image_size)} (estimated)",
+                        file=sys.stderr,
+                    )
+                    if args.yes:
+                        print("  Proceeding anyway (--yes flag set)", file=sys.stderr)
+                    elif not sys.stdin.isatty():
+                        print(
+                            "  Run with --yes to proceed anyway, or free up disk space",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    elif not confirm_proceed("Continue anyway?"):
+                        return 130
+                elif free_space - image_size < 1024 * 1024 * 1024:
+                    print(
+                        f"Warning: Less than 1 GB would remain after pulling image on {storage_root}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Available: {format_size(free_space)}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Required:  {format_size(image_size)} (estimated)",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Remaining: {format_size(free_space - image_size)}",
+                        file=sys.stderr,
+                    )
+                    if args.yes:
+                        print("  Proceeding anyway (--yes flag set)", file=sys.stderr)
+                    elif not sys.stdin.isatty():
+                        print(
+                            "  Run with --yes to proceed anyway, or free up disk space",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    elif not confirm_proceed("Continue anyway?"):
+                        return 130
 
     if args.pull == "always" or (args.pull == "missing" and not image_exists):
         if not pull_image(runtime, image, args.quiet):

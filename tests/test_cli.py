@@ -949,3 +949,203 @@ class TestConfirmProceed:
                 result = confirm_proceed("Continue?")
         assert result is False
         mock_input.assert_not_called()
+
+
+class TestSpaceCheckIntegration:
+    """Integration tests for disk space checking in main() function."""
+
+    def test_space_check_skipped_when_pull_never(self, tmp_path, monkeypatch):
+        """Test that space check is skipped entirely when --pull=never."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", ["mdify", "--pull=never", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=True):
+                    with patch("mdify.cli.get_storage_root") as mock_storage:
+                        with patch("mdify.cli.DoclingContainer"):
+                            from mdify.cli import main
+
+                            result = main()
+                            # Space check should NOT run because pull=never
+                            mock_storage.assert_not_called()
+
+    def test_space_check_skipped_when_image_exists(self, tmp_path, monkeypatch):
+        """Test that space check is skipped when image exists and pull=missing."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", ["mdify", "--pull=missing", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=True):
+                    with patch("mdify.cli.get_storage_root") as mock_storage:
+                        with patch("mdify.cli.DoclingContainer"):
+                            from mdify.cli import main
+
+                            result = main()
+                            # Space check should NOT run because image exists
+                            mock_storage.assert_not_called()
+
+    def test_space_check_warns_insufficient_space(self, tmp_path, monkeypatch, capsys):
+        """Test that warning is printed when free space < image size."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", ["mdify", "--pull=always", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=False):
+                    with patch(
+                        "mdify.cli.get_storage_root", return_value="/var/lib/docker"
+                    ):
+                        with patch(
+                            "mdify.cli.get_image_size_estimate",
+                            return_value=5_000_000_000,
+                        ):
+                            with patch(
+                                "mdify.cli.get_free_space", return_value=3_000_000_000
+                            ):
+                                with patch(
+                                    "mdify.cli.confirm_proceed", return_value=True
+                                ):
+                                    with patch(
+                                        "mdify.cli.pull_image", return_value=True
+                                    ):
+                                        with patch("mdify.cli.DoclingContainer"):
+                                            from mdify.cli import main
+
+                                            result = main()
+                                            captured = capsys.readouterr()
+                                            assert (
+                                                "Not enough free disk space"
+                                                in captured.err
+                                            )
+
+    def test_space_check_warns_low_remaining(self, tmp_path, monkeypatch, capsys):
+        """Test that warning is printed when remaining space < 1GB."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        # 2GB image, 2.5GB free → remaining = 0.5GB (< 1GB threshold)
+        with patch.object(sys, "argv", ["mdify", "--pull=always", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=False):
+                    with patch(
+                        "mdify.cli.get_storage_root", return_value="/var/lib/docker"
+                    ):
+                        with patch(
+                            "mdify.cli.get_image_size_estimate",
+                            return_value=2_000_000_000,
+                        ):
+                            with patch(
+                                "mdify.cli.get_free_space", return_value=2_500_000_000
+                            ):
+                                with patch(
+                                    "mdify.cli.confirm_proceed", return_value=True
+                                ):
+                                    with patch(
+                                        "mdify.cli.pull_image", return_value=True
+                                    ):
+                                        with patch("mdify.cli.DoclingContainer"):
+                                            from mdify.cli import main
+
+                                            result = main()
+                                            captured = capsys.readouterr()
+                                            assert (
+                                                "Less than 1 GB would remain"
+                                                in captured.err
+                                            )
+
+    def test_space_check_yes_flag_skips_prompt(self, tmp_path, monkeypatch):
+        """Test that --yes flag skips confirmation prompt."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(
+            sys, "argv", ["mdify", "--yes", "--pull=always", str(test_file)]
+        ):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=False):
+                    with patch(
+                        "mdify.cli.get_storage_root", return_value="/var/lib/docker"
+                    ):
+                        with patch(
+                            "mdify.cli.get_image_size_estimate",
+                            return_value=5_000_000_000,
+                        ):
+                            with patch(
+                                "mdify.cli.get_free_space", return_value=3_000_000_000
+                            ):
+                                with patch("mdify.cli.confirm_proceed") as mock_confirm:
+                                    with patch(
+                                        "mdify.cli.pull_image", return_value=True
+                                    ):
+                                        with patch("mdify.cli.DoclingContainer"):
+                                            from mdify.cli import main
+
+                                            result = main()
+                                            # confirm_proceed should NOT be called with --yes
+                                            mock_confirm.assert_not_called()
+
+    def test_space_check_non_tty_no_yes_aborts(self, tmp_path, monkeypatch, capsys):
+        """Test that non-TTY without --yes prints error and exits with code 1."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", ["mdify", "--pull=always", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=False):
+                    with patch(
+                        "mdify.cli.get_storage_root", return_value="/var/lib/docker"
+                    ):
+                        with patch(
+                            "mdify.cli.get_image_size_estimate",
+                            return_value=5_000_000_000,
+                        ):
+                            with patch(
+                                "mdify.cli.get_free_space", return_value=3_000_000_000
+                            ):
+                                with patch("sys.stdin.isatty", return_value=False):
+                                    from mdify.cli import main
+
+                                    result = main()
+                                    assert result == 1
+                                    captured = capsys.readouterr()
+                                    assert "Not enough free disk space" in captured.err
+                                    assert (
+                                        "Run with --yes to proceed anyway"
+                                        in captured.err
+                                    )
+
+    def test_space_check_user_declines_exits_130(self, tmp_path, monkeypatch):
+        """Test that user declining confirmation exits with code 130."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", ["mdify", "--pull=always", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="docker"):
+                with patch("mdify.cli.check_image_exists", return_value=False):
+                    with patch(
+                        "mdify.cli.get_storage_root", return_value="/var/lib/docker"
+                    ):
+                        with patch(
+                            "mdify.cli.get_image_size_estimate",
+                            return_value=5_000_000_000,
+                        ):
+                            with patch(
+                                "mdify.cli.get_free_space", return_value=3_000_000_000
+                            ):
+                                with patch(
+                                    "mdify.cli.confirm_proceed", return_value=False
+                                ):
+                                    with patch("sys.stdin.isatty", return_value=True):
+                                        from mdify.cli import main
+
+                                        result = main()
+                                        assert result == 130
