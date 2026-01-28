@@ -1,5 +1,6 @@
 """Tests for mdify CLI runtime detection."""
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch, Mock
@@ -20,6 +21,7 @@ from mdify.cli import (
     get_output_path,
     check_image_exists,
     pull_image,
+    get_image_size_estimate,
 )
 
 
@@ -771,3 +773,179 @@ class TestContainerRuntime:
         assert result is False
         captured = capsys.readouterr()
         assert "Error pulling image" in captured.err
+
+
+class TestGetStorageRoot:
+    """Tests for get_storage_root() function."""
+
+    def test_docker_storage_root_success(self):
+        """Test get_storage_root returns Docker storage root on success."""
+        from mdify.cli import get_storage_root
+
+        mock_result = Mock()
+        mock_result.stdout = b"/var/lib/docker\n"
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = get_storage_root("docker")
+        assert result == "/var/lib/docker"
+        mock_run.assert_called_once_with(
+            ["docker", "system", "info", "--format", "{{.DockerRootDir}}"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_podman_storage_root_success(self):
+        """Test get_storage_root returns Podman storage root on success."""
+        from mdify.cli import get_storage_root
+        import json
+
+        podman_output = json.dumps(
+            {"store": {"graphRoot": "/var/lib/containers/storage"}}
+        )
+        mock_result = Mock()
+        mock_result.stdout = podman_output.encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = get_storage_root("podman")
+        assert result == "/var/lib/containers/storage"
+        mock_run.assert_called_once_with(
+            ["podman", "info", "--format", "json"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_storage_root_command_fails(self):
+        """Test get_storage_root returns None when command fails."""
+        from mdify.cli import get_storage_root
+
+        mock_result = Mock()
+        mock_result.stdout = b""
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = get_storage_root("docker")
+        assert result is None
+
+    def test_storage_root_oserror(self):
+        """Test get_storage_root returns None on OSError."""
+        from mdify.cli import get_storage_root
+
+        with patch(
+            "mdify.cli.subprocess.run", side_effect=OSError("Command not found")
+        ):
+            result = get_storage_root("docker")
+        assert result is None
+
+
+class TestGetImageSizeEstimate:
+    """Tests for get_image_size_estimate function."""
+
+    def test_image_size_success(self):
+        """Test get_image_size_estimate returns sum of layer sizes with 50% buffer."""
+        manifest_json = {
+            "Manifests": [
+                {
+                    "OCIManifest": {
+                        "layers": [
+                            {"size": 1000},
+                            {"size": 2000},
+                        ]
+                    }
+                },
+                {
+                    "OCIManifest": {
+                        "layers": [
+                            {"size": 1500},
+                            {"size": 2500},
+                        ]
+                    }
+                },
+            ]
+        }
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(manifest_json).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        assert result == 10500
+
+    def test_image_size_command_fails(self):
+        """Test get_image_size_estimate returns None when command fails."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        assert result is None
+
+    def test_image_size_invalid_json(self):
+        """Test get_image_size_estimate returns None on malformed JSON."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"invalid json"
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        assert result is None
+
+    def test_image_size_adds_buffer(self):
+        """Test get_image_size_estimate applies 50% decompression buffer."""
+        manifest_json = {
+            "Manifests": [
+                {
+                    "OCIManifest": {
+                        "layers": [
+                            {"size": 100},
+                        ]
+                    }
+                },
+            ]
+        }
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(manifest_json).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        assert result == 150
+
+
+class TestConfirmProceed:
+    """Tests for confirm_proceed() user confirmation function."""
+
+    def test_confirm_yes(self, capsys):
+        """Test confirm_proceed returns True when user enters 'y'."""
+        from mdify.cli import confirm_proceed
+
+        with patch("builtins.input", return_value="y"):
+            with patch("sys.stdin.isatty", return_value=True):
+                result = confirm_proceed("Continue?")
+        assert result is True
+        captured = capsys.readouterr()
+        assert "Continue?" in captured.err
+        assert "[y/N]" in captured.err
+
+    def test_confirm_no(self, capsys):
+        """Test confirm_proceed returns False when user enters 'n'."""
+        from mdify.cli import confirm_proceed
+
+        with patch("builtins.input", return_value="n"):
+            with patch("sys.stdin.isatty", return_value=True):
+                result = confirm_proceed("Continue?")
+        assert result is False
+        captured = capsys.readouterr()
+        assert "Continue?" in captured.err
+
+    def test_confirm_empty_default_no(self, capsys):
+        """Test confirm_proceed returns False when user presses Enter (empty input)."""
+        from mdify.cli import confirm_proceed
+
+        with patch("builtins.input", return_value=""):
+            with patch("sys.stdin.isatty", return_value=True):
+                result = confirm_proceed("Continue?", default_no=True)
+        assert result is False
+        captured = capsys.readouterr()
+        assert "[y/N]" in captured.err
+
+    def test_confirm_non_tty(self):
+        """Test confirm_proceed returns False immediately when stdin is not a TTY."""
+        from mdify.cli import confirm_proceed
+
+        with patch("sys.stdin.isatty", return_value=False):
+            with patch("builtins.input") as mock_input:
+                result = confirm_proceed("Continue?")
+        assert result is False
+        mock_input.assert_not_called()

@@ -232,6 +232,44 @@ def pull_image(runtime: str, image: str, quiet: bool = False) -> bool:
         return False
 
 
+def get_image_size_estimate(runtime: str, image: str) -> Optional[int]:
+    """
+    Estimate image size by querying registry manifest.
+
+    Runs `<runtime> manifest inspect --verbose <image>` and sums all layer sizes
+    across all architectures, then applies 50% buffer for decompression.
+
+    Args:
+        runtime: Path to container runtime
+        image: Image name/tag
+
+    Returns:
+        Estimated size in bytes with 50% buffer, or None if command fails.
+    """
+    try:
+        result = subprocess.run(
+            [runtime, "manifest", "inspect", "--verbose", image],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+
+        manifest_data = json.loads(result.stdout.decode())
+
+        # Sum all layer sizes across all architectures
+        total_size = 0
+        for manifest in manifest_data.get("Manifests", []):
+            oci_manifest = manifest.get("OCIManifest", {})
+            for layer in oci_manifest.get("layers", []):
+                total_size += layer.get("size", 0)
+
+        # Apply 50% buffer for decompression (compressed -> uncompressed)
+        return int(total_size * 1.5)
+    except (json.JSONDecodeError, KeyError, ValueError, OSError):
+        return None
+
+
 def format_size(size_bytes: int) -> str:
     """Format file size in human-readable format."""
     for unit in ["B", "KB", "MB", "GB"]:
@@ -260,6 +298,39 @@ def get_free_space(path: str) -> int:
         return shutil.disk_usage(path).free
     except (FileNotFoundError, OSError):
         return 0
+
+
+def get_storage_root(runtime: str) -> Optional[str]:
+    """
+    Get the storage root directory for Docker or Podman.
+
+    Args:
+        runtime: Container runtime name ('docker' or 'podman')
+
+    Returns:
+        Storage root path as string, or None if command fails.
+    """
+    try:
+        if runtime == "docker":
+            result = subprocess.run(
+                [runtime, "system", "info", "--format", "{{.DockerRootDir}}"],
+                capture_output=True,
+                check=False,
+            )
+            if result.stdout:
+                return result.stdout.decode().strip()
+        elif runtime == "podman":
+            result = subprocess.run(
+                [runtime, "info", "--format", "json"],
+                capture_output=True,
+                check=False,
+            )
+            if result.stdout:
+                info = json.loads(result.stdout.decode())
+                return info.get("store", {}).get("graphRoot")
+        return None
+    except OSError:
+        return None
 
 
 class Spinner:
