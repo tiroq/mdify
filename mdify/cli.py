@@ -464,6 +464,13 @@ Examples:
     )
 
     parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompts (for scripts/CI)",
+    )
+
+    parser.add_argument(
         "-m",
         "--mask",
         action="store_true",
