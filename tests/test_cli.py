@@ -168,6 +168,30 @@ class TestNewCLIArgs:
             assert args.port == 65535
 
 
+class TestYesFlag:
+    """Test --yes / -y flag for skipping confirmation prompts."""
+
+    def test_yes_flag_default_false(self):
+        """Test --yes flag defaults to False."""
+        with patch.object(sys, "argv", ["mdify", "test.pdf"]):
+            args = parse_args()
+            assert args.yes is False
+
+    def test_yes_short_flag(self):
+        """Test -y flag sets args.yes to True."""
+        with patch.object(sys, "argv", ["mdify", "-y", "test.pdf"]):
+            args = parse_args()
+            assert args.yes is True
+            assert args.input == "test.pdf"
+
+    def test_yes_long_flag(self):
+        """Test --yes flag sets args.yes to True."""
+        with patch.object(sys, "argv", ["mdify", "--yes", "test.pdf"]):
+            args = parse_args()
+            assert args.yes is True
+            assert args.input == "test.pdf"
+
+
 class TestPathResolution:
     """Tests for path resolution error handling."""
 
@@ -259,6 +283,39 @@ class TestUtilityFunctions:
         """Test format_duration at exact 60-second boundary."""
         result = format_duration(60)
         assert result == "1m 0s"
+
+
+class TestGetFreeSpace:
+    """Tests for get_free_space utility function."""
+
+    def test_free_space_success(self):
+        """Test get_free_space successfully returns free bytes from shutil.disk_usage."""
+        from mdify.cli import get_free_space
+
+        mock_usage = Mock()
+        mock_usage.free = 1073741824
+
+        with patch("mdify.cli.shutil.disk_usage", return_value=mock_usage):
+            result = get_free_space("/tmp")
+            assert result == 1073741824
+
+    def test_free_space_path_not_exists(self):
+        """Test get_free_space returns 0 for nonexistent path."""
+        from mdify.cli import get_free_space
+
+        with patch("mdify.cli.shutil.disk_usage", side_effect=FileNotFoundError()):
+            result = get_free_space("/nonexistent/path/that/does/not/exist")
+            assert result == 0
+
+    def test_free_space_oserror(self):
+        """Test get_free_space returns 0 on OSError (permission denied, etc)."""
+        from mdify.cli import get_free_space
+
+        with patch(
+            "mdify.cli.shutil.disk_usage", side_effect=OSError("Permission denied")
+        ):
+            result = get_free_space("/restricted/path")
+            assert result == 0
 
 
 class TestVersionComparison:

@@ -254,6 +254,14 @@ def format_duration(seconds: float) -> str:
     return f"{hours}h {mins}m {secs:.0f}s"
 
 
+def get_free_space(path: str) -> int:
+    """Get free disk space for the given path in bytes."""
+    try:
+        return shutil.disk_usage(path).free
+    except (FileNotFoundError, OSError):
+        return 0
+
+
 class Spinner:
     """A simple spinner to show progress during long operations."""
 
