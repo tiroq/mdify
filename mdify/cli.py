@@ -313,7 +313,7 @@ def get_storage_root(runtime: str) -> Optional[str]:
     try:
         # Extract runtime name from path (e.g., /usr/bin/docker -> docker)
         runtime_name = os.path.basename(runtime)
-        
+
         if runtime_name == "docker":
             result = subprocess.run(
                 [runtime, "system", "info", "--format", "{{.DockerRootDir}}"],
