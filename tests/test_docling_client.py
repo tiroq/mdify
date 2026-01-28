@@ -133,6 +133,26 @@ class TestConvertFile:
 
             assert result.format == "html"
 
+    def test_convert_file_new_document_format(self, tmp_path):
+        """Test file conversion with new document.md_content format."""
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"fake pdf content")
+
+        with patch("mdify.docling_client.requests.post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "document": {"md_content": "# New Format Content\n\nMarkdown here."}
+            }
+            mock_post.return_value = mock_response
+
+            result = convert_file("http://localhost:5001", test_file)
+
+            assert result.success is True
+            assert "# New Format Content" in result.content
+            assert result.error is None
+            assert result.format == "md"
+
 
 class TestConvertFileAsync:
     """Test async file conversion."""
@@ -301,6 +321,25 @@ class TestGetResult:
 
             assert result.success is False
             assert result.error is not None
+
+    def test_get_result_new_document_format(self):
+        """Test getting result with new document.md_content format."""
+        with patch("mdify.docling_client.requests.get") as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "document": {
+                    "md_content": "# Result with MD Content\n\nFormatted markdown."
+                }
+            }
+            mock_get.return_value = mock_response
+
+            result = get_result("http://localhost:5001", "abc123")
+
+            assert result.success is True
+            assert "# Result with MD Content" in result.content
+            assert result.error is None
+            assert result.format == "md"
 
 
 class TestDataClasses:
