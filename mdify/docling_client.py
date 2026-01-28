@@ -48,6 +48,42 @@ def _get_mime_type(file_path: Path) -> str:
     return mime_type or "application/octet-stream"
 
 
+def _extract_content(result_data) -> str:
+    """Extract content from API response, supporting both old and new formats.
+
+    Supports:
+    - New format: {"document": {"md_content": "..."}}
+    - Fallback: {"document": {"content": "..."}}
+    - Old format: {"content": "..."}
+    - List format: [{"document": {...}} or {"content": "..."}]
+
+    Args:
+        result_data: Response data from docling-serve API
+
+    Returns:
+        Extracted content string, or empty string if not found
+    """
+    if isinstance(result_data, dict):
+        # New format with document field
+        if "document" in result_data:
+            doc = result_data["document"]
+            # Try md_content first, then content
+            return doc.get("md_content", "") or doc.get("content", "")
+        # Old format without document field
+        return result_data.get("content", "")
+    elif isinstance(result_data, list) and len(result_data) > 0:
+        # List format - process first item
+        first_result = result_data[0]
+        if isinstance(first_result, dict):
+            if "document" in first_result:
+                doc = first_result["document"]
+                # Try md_content first, then content
+                return doc.get("md_content", "") or doc.get("content", "")
+            # Old format without document field
+            return first_result.get("content", "")
+    return ""
+
+
 def check_health(base_url: str) -> bool:
     """Check if docling-serve is healthy.
 
@@ -95,17 +131,10 @@ def convert_file(
             )
 
         result_data = response.json()
+        content = _extract_content(result_data)
 
-        # docling-serve returns results in a list format
-        if isinstance(result_data, list) and len(result_data) > 0:
-            first_result = result_data[0]
-            return ConvertResult(
-                content=first_result.get("content", ""), format=to_format, success=True
-            )
-        elif isinstance(result_data, dict):
-            return ConvertResult(
-                content=result_data.get("content", ""), format=to_format, success=True
-            )
+        if content or isinstance(result_data, (dict, list)):
+            return ConvertResult(content=content, format=to_format, success=True)
         else:
             raise DoclingHTTPError(200, f"Unexpected response format: {result_data}")
 
@@ -210,19 +239,21 @@ def get_result(base_url: str, task_id: str) -> ConvertResult:
             )
 
         result_data = response.json()
+        content = _extract_content(result_data)
 
-        # Similar to sync conversion, handle list or dict format
-        if isinstance(result_data, list) and len(result_data) > 0:
+        # Determine format from response, defaulting to "md"
+        result_format = "md"
+        if isinstance(result_data, dict):
+            result_format = result_data.get("format", "md")
+        elif isinstance(result_data, list) and len(result_data) > 0:
             first_result = result_data[0]
+            if isinstance(first_result, dict):
+                result_format = first_result.get("format", "md")
+
+        if content or isinstance(result_data, (dict, list)):
             return ConvertResult(
-                content=first_result.get("content", ""),
-                format=first_result.get("format", "md"),
-                success=True,
-            )
-        elif isinstance(result_data, dict):
-            return ConvertResult(
-                content=result_data.get("content", ""),
-                format=result_data.get("format", "md"),
+                content=content,
+                format=result_format,
                 success=True,
             )
         else:
