@@ -232,6 +232,44 @@ def pull_image(runtime: str, image: str, quiet: bool = False) -> bool:
         return False
 
 
+def get_image_size_estimate(runtime: str, image: str) -> Optional[int]:
+    """
+    Estimate image size by querying registry manifest.
+
+    Runs `<runtime> manifest inspect --verbose <image>` and sums all layer sizes
+    across all architectures, then applies 50% buffer for decompression.
+
+    Args:
+        runtime: Path to container runtime
+        image: Image name/tag
+
+    Returns:
+        Estimated size in bytes with 50% buffer, or None if command fails.
+    """
+    try:
+        result = subprocess.run(
+            [runtime, "manifest", "inspect", "--verbose", image],
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+
+        manifest_data = json.loads(result.stdout.decode())
+
+        # Sum all layer sizes across all architectures
+        total_size = 0
+        for manifest in manifest_data.get("Manifests", []):
+            oci_manifest = manifest.get("OCIManifest", {})
+            for layer in oci_manifest.get("layers", []):
+                total_size += layer.get("size", 0)
+
+        # Apply 50% buffer for decompression (compressed -> uncompressed)
+        return int(total_size * 1.5)
+    except (json.JSONDecodeError, KeyError, ValueError, OSError):
+        return None
+
+
 def format_size(size_bytes: int) -> str:
     """Format file size in human-readable format."""
     for unit in ["B", "KB", "MB", "GB"]:
@@ -252,6 +290,71 @@ def format_duration(seconds: float) -> str:
     hours = minutes // 60
     mins = minutes % 60
     return f"{hours}h {mins}m {secs:.0f}s"
+
+
+def get_free_space(path: str) -> int:
+    """Get free disk space for the given path in bytes."""
+    try:
+        return shutil.disk_usage(path).free
+    except (FileNotFoundError, OSError):
+        return 0
+
+
+def get_storage_root(runtime: str) -> Optional[str]:
+    """
+    Get the storage root directory for Docker or Podman.
+
+    Args:
+        runtime: Path to container runtime executable
+
+    Returns:
+        Storage root path as string, or None if command fails.
+    """
+    try:
+        # Extract runtime name from path (e.g., /usr/bin/docker -> docker)
+        runtime_name = os.path.basename(runtime)
+
+        if runtime_name == "docker":
+            result = subprocess.run(
+                [runtime, "system", "info", "--format", "{{.DockerRootDir}}"],
+                capture_output=True,
+                check=False,
+            )
+            if result.stdout:
+                return result.stdout.decode().strip()
+        elif runtime_name == "podman":
+            result = subprocess.run(
+                [runtime, "info", "--format", "json"],
+                capture_output=True,
+                check=False,
+            )
+            if result.stdout:
+                info = json.loads(result.stdout.decode())
+                return info.get("store", {}).get("graphRoot")
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def confirm_proceed(message: str, default_no: bool = True) -> bool:
+    """
+    Prompt user for confirmation with a y/N prompt.
+
+    Args:
+        message: The confirmation message to display
+        default_no: If True, shows [y/N] (default no). If False, shows [Y/n] (default yes)
+
+    Returns:
+        True if user entered 'y' or 'Y', False otherwise.
+        Returns False immediately if stdin is not a TTY (non-interactive).
+    """
+    if not sys.stdin.isatty():
+        return False
+
+    prompt = "[y/N]" if default_no else "[Y/n]"
+    print(f"{message} {prompt}", file=sys.stderr)
+    response = input()
+    return response.lower() == "y"
 
 
 class Spinner:
@@ -456,6 +559,13 @@ Examples:
     )
 
     parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip confirmation prompts (for scripts/CI)",
+    )
+
+    parser.add_argument(
         "-m",
         "--mask",
         action="store_true",
@@ -571,6 +681,70 @@ def main() -> int:
         image = DEFAULT_IMAGE
 
     image_exists = check_image_exists(runtime, image)
+
+    # NOTE: Docker Desktop on macOS/Windows uses a VM, so disk space checks may not
+    # accurately reflect available space in the container's filesystem. Remote Docker
+    # daemons (DOCKER_HOST) are also not supported. In these cases, the check will
+    # gracefully degrade (warn and proceed).
+
+    # Check disk space before pulling image (skip if pull=never or image exists with pull=missing)
+    will_pull = args.pull == "always" or (args.pull == "missing" and not image_exists)
+    if will_pull:
+        storage_root = get_storage_root(runtime)
+        if storage_root:
+            image_size = get_image_size_estimate(runtime, image)
+            if image_size:
+                free_space = get_free_space(storage_root)
+                if free_space < image_size:
+                    print(
+                        f"Warning: Not enough free disk space on {storage_root}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Available: {format_size(free_space)}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Required:  {format_size(image_size)} (estimated)",
+                        file=sys.stderr,
+                    )
+                    if args.yes:
+                        print("  Proceeding anyway (--yes flag set)", file=sys.stderr)
+                    elif not sys.stdin.isatty():
+                        print(
+                            "  Run with --yes to proceed anyway, or free up disk space",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    elif not confirm_proceed("Continue anyway?"):
+                        return 130
+                elif free_space - image_size < 1024 * 1024 * 1024:
+                    print(
+                        f"Warning: Less than 1 GB would remain after pulling image on {storage_root}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Available: {format_size(free_space)}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Required:  {format_size(image_size)} (estimated)",
+                        file=sys.stderr,
+                    )
+                    print(
+                        f"  Remaining: {format_size(free_space - image_size)}",
+                        file=sys.stderr,
+                    )
+                    if args.yes:
+                        print("  Proceeding anyway (--yes flag set)", file=sys.stderr)
+                    elif not sys.stdin.isatty():
+                        print(
+                            "  Run with --yes to proceed anyway, or free up disk space",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    elif not confirm_proceed("Continue anyway?"):
+                        return 130
 
     if args.pull == "always" or (args.pull == "missing" and not image_exists):
         if not pull_image(runtime, image, args.quiet):
