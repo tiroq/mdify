@@ -311,7 +311,110 @@ class TestDoclingContainerIntegration:
             container1 = DoclingContainer("docker", "image1", port=5001)
             container2 = DoclingContainer("docker", "image2", port=5002)
 
-            # Each should be independent
             assert container1.port == 5001
             assert container2.port == 5002
             assert container1.container_name != container2.container_name
+
+
+class TestDoclingContainerCleanup:
+    """Test cleanup of stale containers."""
+
+    def test_cleanup_no_stale_containers(self):
+        """Test cleanup runs when no stale containers exist."""
+        with patch("mdify.container.subprocess.run") as mock_run, patch(
+            "mdify.container.check_health"
+        ) as mock_health:
+            ps_result = Mock()
+            ps_result.returncode = 0
+            ps_result.stdout = ""
+
+            run_result = Mock()
+            run_result.stdout = "container_id\n"
+
+            mock_run.side_effect = [ps_result, run_result]
+            mock_health.return_value = True
+
+            container = DoclingContainer("docker", "test-image")
+            container.start(timeout=5)
+
+            ps_call = mock_run.call_args_list[0][0][0]
+            assert "ps" in ps_call
+            assert "--filter" in ps_call
+            assert "name=mdify-serve-" in ps_call
+
+    def test_cleanup_stops_stale_containers(self):
+        """Test cleanup finds and stops stale containers."""
+        with patch("mdify.container.subprocess.run") as mock_run, patch(
+            "mdify.container.check_health"
+        ) as mock_health:
+            ps_result = Mock()
+            ps_result.returncode = 0
+            ps_result.stdout = "mdify-serve-abc123\nmdify-serve-def456\n"
+
+            stop_result1 = Mock()
+            stop_result2 = Mock()
+
+            run_result = Mock()
+            run_result.stdout = "container_id\n"
+
+            mock_run.side_effect = [ps_result, stop_result1, stop_result2, run_result]
+            mock_health.return_value = True
+
+            container = DoclingContainer("docker", "test-image")
+            container.start(timeout=5)
+
+            ps_call = mock_run.call_args_list[0][0][0]
+            assert "ps" in ps_call
+
+            stop_calls = [
+                call for call in mock_run.call_args_list if "stop" in str(call)
+            ]
+            assert len(stop_calls) == 2
+            assert "mdify-serve-abc123" in str(stop_calls[0])
+            assert "mdify-serve-def456" in str(stop_calls[1])
+
+    def test_cleanup_handles_subprocess_error(self):
+        """Test cleanup handles subprocess errors gracefully."""
+        with patch("mdify.container.subprocess.run") as mock_run, patch(
+            "mdify.container.check_health"
+        ) as mock_health:
+            ps_result = Mock()
+            ps_result.returncode = 1
+            ps_result.stdout = ""
+
+            run_result = Mock()
+            run_result.stdout = "container_id\n"
+
+            mock_run.side_effect = [ps_result, run_result]
+            mock_health.return_value = True
+
+            container = DoclingContainer("docker", "test-image")
+            container.start(timeout=5)
+
+            assert container.container_id == "container_id"
+
+    def test_start_calls_cleanup(self):
+        """Test that start() calls _cleanup_stale_containers()."""
+        with patch("mdify.container.subprocess.run") as mock_run, patch(
+            "mdify.container.check_health"
+        ) as mock_health:
+            ps_result = Mock()
+            ps_result.returncode = 0
+            ps_result.stdout = ""
+
+            run_result = Mock()
+            run_result.stdout = "new_container_id\n"
+
+            mock_run.side_effect = [ps_result, run_result]
+            mock_health.return_value = True
+
+            container = DoclingContainer("docker", "test-image")
+            container.start(timeout=5)
+
+            all_calls = mock_run.call_args_list
+            ps_called = any("ps" in str(call) for call in all_calls[:1])
+            run_called = any("run" in str(call) for call in all_calls)
+
+            assert ps_called
+            assert run_called
+            assert "ps" in all_calls[0][0][0]
