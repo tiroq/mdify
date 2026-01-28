@@ -41,6 +41,39 @@ class DoclingContainer:
         """Return base URL for API requests."""
         return f"http://localhost:{self.port}"
 
+    def _cleanup_stale_containers(self) -> None:
+        """Stop any existing mdify-serve containers.
+
+        This handles the case where a previous run left a container running
+        (e.g., due to crash, interrupt, or timeout).
+        """
+        # Find running containers matching mdify-serve-* pattern
+        result = subprocess.run(
+            [
+                self.runtime,
+                "ps",
+                "--filter",
+                "name=mdify-serve-",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0 or not result.stdout.strip():
+            return
+
+        # Stop each stale container
+        for container_name in result.stdout.strip().split("\n"):
+            if container_name:
+                subprocess.run(
+                    [self.runtime, "stop", container_name],
+                    capture_output=True,
+                    check=False,
+                )
+
     def start(self, timeout: int = 120) -> None:
         """Start container and wait for health check.
 
@@ -51,6 +84,8 @@ class DoclingContainer:
             subprocess.CalledProcessError: If container fails to start
             TimeoutError: If health check doesn't pass within timeout
         """
+        self._cleanup_stale_containers()
+
         # Start container in detached mode
         cmd = [
             self.runtime,
