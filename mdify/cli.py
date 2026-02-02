@@ -1008,11 +1008,24 @@ def main() -> int:
                     # Stop spinner before printing error
                     if not args.quiet:
                         spinner.stop()
+                    
+                    # Check if container is still healthy
+                    error_msg = str(e)
+                    if "Connection refused" in error_msg or "Connection aborted" in error_msg or "RemoteDisconnected" in error_msg:
+                        if not container.is_ready():
+                            if not args.quiet:
+                                print(
+                                    f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                                )
+                                print(f"    Error: Container crashed (file may be too complex or large)", file=sys.stderr)
+                                print(f"    Stopping remaining conversions", file=sys.stderr)
+                            break
+                    
                     if not args.quiet:
                         print(
                             f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                         )
-                        print(f"    Error: {str(e)}", file=sys.stderr)
+                        print(f"    Error: {error_msg}", file=sys.stderr)
 
             total_elapsed = time.time() - conversion_start
 
