@@ -41,6 +41,108 @@ OTHER_RUNTIMES_PRIORITY = ("docker", "podman")
 # Debug mode
 DEBUG = os.environ.get("MDIFY_DEBUG", "").lower() in ("1", "true", "yes")
 
+# Resource profiles for container execution
+RESOURCE_PROFILES = {
+    "minimal": {"cpus": 4, "memory": "8g", "description": "Small PDFs, text-only documents"},
+    "default": {"cpus": 6, "memory": "12g", "description": "Large PDFs, OCR, tables (recommended)"},
+    "heavy": {"cpus": 8, "memory": "16g", "description": "Batch processing, very large files"},
+}
+
+
+def get_available_memory_gb() -> float:
+    """Get available system memory in GB.
+    
+    Returns:
+        Available memory in GB, or -1 if unable to determine
+    """
+    system = platform.system()
+    try:
+        if system == "Darwin":  # macOS
+            # Get page size
+            result = subprocess.run(["pagesize"], capture_output=True, text=True, check=True)
+            page_size = int(result.stdout.strip())
+            
+            # Get memory stats
+            result = subprocess.run(["vm_stat"], capture_output=True, text=True, check=True)
+            free_pages = 0
+            inactive_pages = 0
+            speculative_pages = 0
+            
+            for line in result.stdout.split("\n"):
+                if "Pages free" in line:
+                    free_pages = int(line.split(":")[1].strip().rstrip("."))
+                elif "Pages inactive" in line:
+                    inactive_pages = int(line.split(":")[1].strip().rstrip("."))
+                elif "Pages speculative" in line:
+                    speculative_pages = int(line.split(":")[1].strip().rstrip("."))
+            
+            # Available memory = free + inactive + speculative
+            available_pages = free_pages + inactive_pages + speculative_pages
+            available_bytes = available_pages * page_size
+            return available_bytes / (1024**3)  # Convert to GB
+        elif system == "Linux":
+            # Read from /proc/meminfo
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        kb = int(line.split()[1])
+                        return kb / (1024**2)  # Convert to GB
+    except Exception:
+        pass
+    
+    return -1
+
+
+def parse_memory_string(mem_str: str) -> float:
+    """Parse memory string (e.g., '12g', '8192m') to GB.
+    
+    Args:
+        mem_str: Memory string with unit (g, m, gb, mb)
+        
+    Returns:
+        Memory in GB
+    """
+    mem_str = mem_str.lower().strip()
+    
+    if mem_str.endswith("gb"):
+        return float(mem_str[:-2])
+    elif mem_str.endswith("g"):
+        return float(mem_str[:-1])
+    elif mem_str.endswith("mb"):
+        return float(mem_str[:-2]) / 1024
+    elif mem_str.endswith("m"):
+        return float(mem_str[:-1]) / 1024
+    else:
+        raise ValueError(f"Invalid memory format: {mem_str}")
+
+
+def validate_memory_availability(required_gb: float) -> tuple[bool, str]:
+    """Check if system has sufficient available memory.
+    
+    Args:
+        required_gb: Required memory in GB
+        
+    Returns:
+        Tuple of (is_sufficient, error_message)
+    """
+    available_gb = get_available_memory_gb()
+    
+    if available_gb < 0:
+        # Unable to determine, allow startup with warning
+        return True, ""
+    
+    if available_gb < required_gb:
+        error = (
+            f"Insufficient memory available for container startup.\n"
+            f"  Required: {required_gb:.1f} GB\n"
+            f"  Available: {available_gb:.1f} GB\n"
+            f"  Short by: {required_gb - available_gb:.1f} GB\n\n"
+            f"Please close other applications or use a smaller profile (--profile minimal)"
+        )
+        return False, error
+    
+    return True, ""
+
 
 # =============================================================================
 # Update checking functions
@@ -756,7 +858,28 @@ Examples:
         "--memory",
         type=str,
         default=None,
-        help="Container memory limit (e.g., 2g, 512m, 4096m). Default: no limit",
+        help="Container memory limit (e.g., 2g, 512m, 4096m). Overrides --profile setting",
+    )
+
+    parser.add_argument(
+        "--cpus",
+        type=int,
+        default=None,
+        help="Number of CPUs to allocate to container. Overrides --profile setting",
+    )
+
+    parser.add_argument(
+        "--profile",
+        type=str,
+        choices=["minimal", "default", "heavy"],
+        default="default",
+        help="Resource profile for container: minimal (4 CPU, 8GB), default (6 CPU, 12GB), heavy (8 CPU, 16GB)",
+    )
+
+    parser.add_argument(
+        "--skip-memory-check",
+        action="store_true",
+        help="Skip memory availability validation (not recommended)",
     )
 
     # Utility options
@@ -959,7 +1082,25 @@ def main() -> int:
 
     try:
         if not args.quiet:
-            print(f"Starting docling-serve container...")
+            print(f"Starting docling-serve container...\\n")
+
+        # Apply resource profile
+        profile = RESOURCE_PROFILES[args.profile]
+        cpus = args.cpus if args.cpus is not None else profile["cpus"]
+        memory = args.memory if args.memory is not None else profile["memory"]
+        
+        # Validate memory availability unless skipped
+        if not args.skip_memory_check:
+            required_gb = parse_memory_string(memory)
+            is_sufficient, error_msg = validate_memory_availability(required_gb)
+            if not is_sufficient:
+                print(f"Error: {error_msg}", file=sys.stderr)
+                return 1
+        
+        if not args.quiet:
+            print(f"Resource profile: {args.profile} ({cpus} CPUs, {memory} memory)")
+            if args.cpus or args.memory:
+                print("  (customized via command-line arguments)")
             print()
 
         with DoclingContainer(
@@ -968,7 +1109,8 @@ def main() -> int:
             args.port,
             timeout=timeout,
             keep_container=DEBUG,
-            memory=args.memory,
+            memory=memory,
+            cpus=cpus,
         ) as container:
             # Convert files
             conversion_start = time.time()
