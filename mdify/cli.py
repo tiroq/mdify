@@ -10,6 +10,7 @@ is lightweight and has no ML dependencies.
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -33,7 +34,9 @@ CHECK_INTERVAL_SECONDS = 86400  # 24 hours
 # Container configuration
 DEFAULT_IMAGE = "ghcr.io/docling-project/docling-serve-cpu:main"
 GPU_IMAGE = "ghcr.io/docling-project/docling-serve-cu126:main"
-SUPPORTED_RUNTIMES = ("docker", "podman")
+SUPPORTED_RUNTIMES = ("docker", "podman", "orbstack", "colima", "container")
+MACOS_RUNTIMES_PRIORITY = ("container", "orbstack", "colima", "podman", "docker")
+OTHER_RUNTIMES_PRIORITY = ("docker", "podman")
 
 
 # =============================================================================
