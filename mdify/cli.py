@@ -813,6 +813,10 @@ def main() -> int:
 
     image_exists = check_image_exists(runtime, image)
 
+    if not args.quiet and image_exists:
+        print(f"Using cached image: {image}")
+        print()
+
     # NOTE: Docker Desktop on macOS/Windows uses a VM, so disk space checks may not
     # accurately reflect available space in the container's filesystem. Remote Docker
     # daemons (DOCKER_HOST) are also not supported. In these cases, the check will
