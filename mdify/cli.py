@@ -1023,26 +1023,44 @@ def main() -> int:
                     
                     # Check if container is still healthy
                     error_msg = str(e)
-                    if "Connection refused" in error_msg or "Connection aborted" in error_msg or "RemoteDisconnected" in error_msg:
-                        if not container.is_ready():
-                            if not args.quiet:
-                                print(
-                                    f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
-                                )
+                    is_connection_error = "Connection refused" in error_msg or "Connection aborted" in error_msg or "RemoteDisconnected" in error_msg
+                    
+                    if is_connection_error:
+                        container_alive = container.is_ready()
+                        if not args.quiet:
+                            print(
+                                f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                            )
+                            if container_alive:
+                                print(f"    Error: Connection lost (container may be restarting or overloaded)", file=sys.stderr)
+                            else:
                                 print(f"    Error: Container crashed while processing file", file=sys.stderr)
                                 print(f"    File may be too complex, large, or malformed", file=sys.stderr)
+                            
+                            # Show logs for debugging (whether container is alive or not)
+                            if DEBUG or not container_alive:
                                 print(f"    Retrieving container logs...", file=sys.stderr)
-                                # Get last 20 lines of container logs for debugging
-                                logs = container.get_logs(tail=20)
+                                logs = container.get_logs(tail=30)
                                 if logs:
-                                    print(f"    Container logs (last 20 lines):", file=sys.stderr)
+                                    print(f"    Container logs (last 30 lines):", file=sys.stderr)
                                     for line in logs.strip().split('\n'):
                                         print(f"      {line}", file=sys.stderr)
+                                else:
+                                    print(f"    No logs available", file=sys.stderr)
+                            
+                            if not container_alive:
                                 print(f"    Stopping remaining conversions", file=sys.stderr)
+                        
+                        # Stop processing if container is dead
+                        if not container_alive:
                             break
-                    
-                    if not args.quiet:
-                        print(
+                    else:
+                        # Non-connection error
+                        if not args.quiet:
+                            print(
+                                f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                            )
+                            print(f"    Error: {error_msg}", file=sys.stderr)
                             f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                         )
                         print(f"    Error: {error_msg}", file=sys.stderr)
