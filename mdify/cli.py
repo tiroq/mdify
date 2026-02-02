@@ -752,6 +752,13 @@ Examples:
         help="Conversion timeout in seconds (default: 1200, can be set via MDIFY_TIMEOUT env var)",
     )
 
+    parser.add_argument(
+        "--memory",
+        type=str,
+        default=None,
+        help="Container memory limit (e.g., 2g, 512m, 4096m). Default: no limit",
+    )
+
     # Utility options
     parser.add_argument(
         "--check-update",
@@ -961,6 +968,7 @@ def main() -> int:
             args.port,
             timeout=timeout,
             keep_container=DEBUG,
+            memory=args.memory,
         ) as container:
             # Convert files
             conversion_start = time.time()
@@ -1020,6 +1028,53 @@ def main() -> int:
                                 f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                             )
                             print(f"    Error: {error_msg}", file=sys.stderr)
+                            
+                            # Check if it's a connection error and retrieve logs
+                            is_connection_error = "Connection refused" in error_msg or "Connection aborted" in error_msg or "RemoteDisconnected" in error_msg
+                            if is_connection_error:
+                                container_alive = container.is_ready()
+                                if container_alive:
+                                    print(
+                                        "    Connection lost (server may have crashed and restarted)",
+                                        file=sys.stderr,
+                                    )
+                                else:
+                                    print(
+                                        "    Container crashed while processing file",
+                                        file=sys.stderr,
+                                    )
+                                    print(
+                                        "    File may be too complex, large, or malformed",
+                                        file=sys.stderr,
+                                    )
+                                
+                                # Always show logs for connection errors
+                                print("    Retrieving container logs...", file=sys.stderr)
+                                logs, log_error = container.get_logs(tail=50)
+                                if logs:
+                                    print("    Container logs (last 50 lines):", file=sys.stderr)
+                                    for line in logs.strip().split("\n"):
+                                        if line.strip():
+                                            print(f"      {line}", file=sys.stderr)
+                                elif log_error:
+                                    print(f"    Error retrieving logs: {log_error}", file=sys.stderr)
+                                else:
+                                    print("    No logs available (container may have been removed)", file=sys.stderr)
+                                
+                                # Restart container if it crashed
+                                if not container_alive:
+                                    print("    Container crashed - attempting to restart...", file=sys.stderr)
+                                    try:
+                                        # Stop the dead container
+                                        container.stop()
+                                        # Start a new one
+                                        container.start(timeout=120)
+                                        print("    Container restarted successfully", file=sys.stderr)
+                                        print("    Continuing with next file...", file=sys.stderr)
+                                    except Exception as restart_error:
+                                        print(f"    Failed to restart container: {restart_error}", file=sys.stderr)
+                                        print("    Stopping remaining conversions", file=sys.stderr)
+                                        break
                 except Exception as e:
                     elapsed = time.time() - start_time
                     failed_count += 1
@@ -1030,6 +1085,10 @@ def main() -> int:
                     # Check if container is still healthy
                     error_msg = str(e)
                     is_connection_error = "Connection refused" in error_msg or "Connection aborted" in error_msg or "RemoteDisconnected" in error_msg
+                    
+                    if DEBUG:
+                        print(f"    DEBUG: Exception caught: {type(e).__name__}", file=sys.stderr)
+                        print(f"    DEBUG: is_connection_error={is_connection_error}", file=sys.stderr)
                     
                     if is_connection_error:
                         container_alive = container.is_ready()
@@ -1078,9 +1137,20 @@ def main() -> int:
                             if not container_alive:
                                 print("    Stopping remaining conversions", file=sys.stderr)
 
-                        # Stop processing if container is dead
+                        # Restart container if it crashed
                         if not container_alive:
-                            break
+                            print("    Container crashed - attempting to restart...", file=sys.stderr)
+                            try:
+                                # Stop the dead container
+                                container.stop()
+                                # Start a new one
+                                container.start(timeout=120)
+                                print("    Container restarted successfully", file=sys.stderr)
+                                print("    Continuing with next file...", file=sys.stderr)
+                            except Exception as restart_error:
+                                print(f"    Failed to restart container: {restart_error}", file=sys.stderr)
+                                print("    Stopping remaining conversions", file=sys.stderr)
+                                break
                     else:
                         # Non-connection error
                         if not args.quiet:

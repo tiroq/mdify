@@ -27,6 +27,7 @@ class DoclingContainer:
         port: int = 5001,
         timeout: int = 1200,
         keep_container: bool = False,
+        memory: Optional[str] = None,
     ):
         """Initialize container manager.
 
@@ -36,12 +37,14 @@ class DoclingContainer:
             port: Host port to bind (default: 5001)
             timeout: Conversion timeout in seconds (default: 1200)
             keep_container: If True, do not auto-remove container (preserve logs)
+            memory: Memory limit (e.g., "2g", "512m"). None for no limit.
         """
         self.runtime = runtime
         self.image = image
         self.port = port
         self.timeout = timeout
         self.keep_container = keep_container
+        self.memory = memory
         self.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
         self.container_id: Optional[str] = None
 
@@ -110,6 +113,11 @@ class DoclingContainer:
         ]
         if not self.keep_container:
             cmd.insert(3, "--rm")  # Auto-remove on stop
+        
+        # Add memory limit if specified
+        if self.memory:
+            cmd.insert(3, self.memory)
+            cmd.insert(3, "-m")
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
