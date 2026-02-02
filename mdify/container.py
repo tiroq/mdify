@@ -125,6 +125,48 @@ class DoclingContainer:
                 check=False,
             )
 
+    def get_logs(self, tail: int = 50) -> str:
+        """Get container logs for debugging.
+
+        Args:
+            tail: Number of lines to retrieve from end of logs
+
+        Returns:
+            Container logs as string
+        """
+        if not self.container_name:
+            return ""
+        
+        try:
+            result = subprocess.run(
+                [self.runtime, "logs", "--tail", str(tail), self.container_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.stdout if result.returncode == 0 else ""
+        except Exception:
+            return ""
+
+    def is_running(self) -> bool:
+        """Check if container process is still running.
+
+        Returns:
+            True if container is running, False otherwise
+        """
+        if not self.container_name:
+            return False
+        
+        try:
+            result = subprocess.run(
+                [self.runtime, "ps", "-q", "-f", f"name={self.container_name}"],
+                capture_output=True,
+                check=False,
+            )
+            return result.returncode == 0 and bool(result.stdout.strip())
+        except Exception:
+            return False
+
     def is_ready(self) -> bool:
         """Check if container is healthy.
 
@@ -132,6 +174,10 @@ class DoclingContainer:
             True if container is healthy, False otherwise
         """
         try:
+            # First check if container is still running
+            if not self.is_running():
+                return False
+            # Then check health endpoint
             return check_health(self.base_url)
         except Exception:
             return False
