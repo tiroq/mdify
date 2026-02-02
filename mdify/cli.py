@@ -283,10 +283,10 @@ def check_image_exists(runtime: str, image: str) -> bool:
     try:
         runtime_name = os.path.basename(runtime)
         
-        # Apple Container uses 'image-list' command
+        # Apple Container uses 'image list' command (two words)
         if runtime_name == "container":
             result = subprocess.run(
-                [runtime, "image-list", "--format", "json"],
+                [runtime, "image", "list", "--format", "json"],
                 capture_output=True,
                 check=False,
             )
@@ -330,10 +330,10 @@ def pull_image(runtime: str, image: str, quiet: bool = False) -> bool:
     try:
         runtime_name = os.path.basename(runtime)
         
-        # Apple Container uses 'image-pull' command
+        # Apple Container uses 'image pull' command (two words)
         if runtime_name == "container":
             result = subprocess.run(
-                [runtime, "image-pull", image],
+                [runtime, "image", "pull", image],
                 capture_output=quiet,
                 check=False,
             )
