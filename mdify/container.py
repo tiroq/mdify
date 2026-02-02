@@ -148,8 +148,17 @@ class DoclingContainer:
             return ("", "No container name set")
         
         try:
+            import os
+            runtime_name = os.path.basename(self.runtime)
+            
+            # Apple Container uses -n instead of --tail
+            if runtime_name == "container":
+                cmd = [self.runtime, "logs", "-n", str(tail), self.container_name]
+            else:
+                cmd = [self.runtime, "logs", "--tail", str(tail), self.container_name]
+            
             result = subprocess.run(
-                [self.runtime, "logs", "--tail", str(tail), self.container_name],
+                cmd,
                 capture_output=True,
                 text=True,
                 check=False,
