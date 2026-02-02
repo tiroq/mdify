@@ -28,6 +28,7 @@ class DoclingContainer:
         timeout: int = 1200,
         keep_container: bool = False,
         memory: Optional[str] = None,
+        cpus: Optional[int] = None,
     ):
         """Initialize container manager.
 
@@ -38,6 +39,7 @@ class DoclingContainer:
             timeout: Conversion timeout in seconds (default: 1200)
             keep_container: If True, do not auto-remove container (preserve logs)
             memory: Memory limit (e.g., "2g", "512m"). None for no limit.
+            cpus: Number of CPUs to allocate. None for no limit.
         """
         self.runtime = runtime
         self.image = image
@@ -45,6 +47,7 @@ class DoclingContainer:
         self.timeout = timeout
         self.keep_container = keep_container
         self.memory = memory
+        self.cpus = cpus
         self.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
         self.container_id: Optional[str] = None
 
@@ -114,7 +117,11 @@ class DoclingContainer:
         if not self.keep_container:
             cmd.insert(3, "--rm")  # Auto-remove on stop
         
-        # Add memory limit if specified
+        # Add resource limits if specified
+        if self.cpus:
+            cmd.insert(3, str(self.cpus))
+            cmd.insert(3, "--cpus")
+        
         if self.memory:
             cmd.insert(3, self.memory)
             cmd.insert(3, "-m")
