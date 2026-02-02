@@ -1054,13 +1054,21 @@ def main() -> int:
 
                             # Always show logs for connection errors to surface root cause
                             print("    Retrieving container logs...", file=sys.stderr)
-                            logs = container.get_logs(tail=30)
+                            logs, log_error = container.get_logs(tail=50)
                             if logs:
-                                print("    Container logs (last 30 lines):", file=sys.stderr)
+                                print("    Container logs (last 50 lines):", file=sys.stderr)
                                 for line in logs.strip().split("\n"):
-                                    print(f"      {line}", file=sys.stderr)
+                                    if line.strip():  # Skip empty lines
+                                        print(f"      {line}", file=sys.stderr)
+                            elif log_error:
+                                print(f"    Error retrieving logs: {log_error}", file=sys.stderr)
+                                if not DEBUG:
+                                    print(
+                                        "    Tip: re-run with MDIFY_DEBUG=1 to preserve container for inspection",
+                                        file=sys.stderr,
+                                    )
                             else:
-                                print("    No logs available", file=sys.stderr)
+                                print("    No logs available (container may have been removed)", file=sys.stderr)
                                 if not DEBUG:
                                     print(
                                         "    Tip: re-run with MDIFY_DEBUG=1 to preserve container logs",
