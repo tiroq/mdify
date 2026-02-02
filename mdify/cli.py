@@ -521,8 +521,8 @@ class Spinner:
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
-        # Clear the spinner line
-        print(f"\r{' ' * 80}\r", end="", flush=True)
+        # Clear the spinner line with enough spaces to cover the longest possible line
+        print(f"\r{' ' * 120}\r", end="", flush=True)
 
 
 # =============================================================================
@@ -982,6 +982,7 @@ def main() -> int:
                     )
                     elapsed = time.time() - start_time
 
+                    # Stop spinner before any output
                     if not args.quiet:
                         spinner.stop()
 
@@ -1004,8 +1005,10 @@ def main() -> int:
                 except Exception as e:
                     elapsed = time.time() - start_time
                     failed_count += 1
+                    # Stop spinner before printing error
                     if not args.quiet:
                         spinner.stop()
+                    if not args.quiet:
                         print(
                             f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                         )
