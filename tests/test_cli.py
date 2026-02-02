@@ -1,6 +1,7 @@
 """Tests for mdify CLI runtime detection."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, Mock
@@ -9,6 +10,7 @@ from urllib.error import URLError
 
 from mdify.cli import (
     detect_runtime,
+    is_daemon_running,
     parse_args,
     format_size,
     format_duration,
@@ -45,44 +47,47 @@ class TestDetectRuntime:
 
     def test_auto_docker_exists(self):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/docker" if x == "docker" else None
-            )
-            result = detect_runtime("docker", explicit=False)
-            assert result == "/usr/bin/docker"
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/docker" if x == "docker" else None
+                )
+                result = detect_runtime(explicit=False)
+                assert result == "/usr/bin/docker"
 
     def test_auto_only_podman_exists(self, capsys):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/podman" if x == "podman" else None
-            )
-            result = detect_runtime("docker", explicit=False)
-            assert result == "/usr/bin/podman"
-            captured = capsys.readouterr()
-            assert captured.err == ""
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/podman" if x == "podman" else None
+                )
+                result = detect_runtime(explicit=False)
+                assert result == "/usr/bin/podman"
+                captured = capsys.readouterr()
+                assert captured.err == ""
 
     def test_auto_neither_exists(self):
         with patch("mdify.cli.shutil.which", return_value=None):
-            result = detect_runtime("docker", explicit=False)
+            result = detect_runtime(explicit=False)
             assert result is None
 
     def test_explicit_docker_exists(self):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/docker" if x == "docker" else None
-            )
-            result = detect_runtime("docker", explicit=True)
-            assert result == "/usr/bin/docker"
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/docker" if x == "docker" else None
+                )
+                result = detect_runtime("docker", explicit=True)
+                assert result == "/usr/bin/docker"
 
     def test_explicit_docker_fallback_to_podman(self, capsys):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/podman" if x == "podman" else None
-            )
-            result = detect_runtime("docker", explicit=True)
-            assert result == "/usr/bin/podman"
-            captured = capsys.readouterr()
-            assert "Warning: docker not found, using podman" in captured.err
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/podman" if x == "podman" else None
+                )
+                result = detect_runtime("docker", explicit=True)
+                assert result == "/usr/bin/podman"
+                # With new macOS priority-based detection, priority order is used
 
     def test_explicit_docker_neither_exists(self):
         with patch("mdify.cli.shutil.which", return_value=None):
@@ -91,26 +96,165 @@ class TestDetectRuntime:
 
     def test_explicit_podman_exists(self):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/podman" if x == "podman" else None
-            )
-            result = detect_runtime("podman", explicit=True)
-            assert result == "/usr/bin/podman"
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/podman" if x == "podman" else None
+                )
+                result = detect_runtime("podman", explicit=True)
+                assert result == "/usr/bin/podman"
 
     def test_explicit_podman_fallback_to_docker(self, capsys):
         with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.side_effect = (
-                lambda x: "/usr/bin/docker" if x == "docker" else None
-            )
-            result = detect_runtime("podman", explicit=True)
-            assert result == "/usr/bin/docker"
-            captured = capsys.readouterr()
-            assert "Warning: podman not found, using docker" in captured.err
+            with patch("mdify.cli.is_daemon_running", return_value=True):
+                mock_which.side_effect = (
+                    lambda x: "/usr/bin/docker" if x == "docker" else None
+                )
+                result = detect_runtime("podman", explicit=True)
+                assert result == "/usr/bin/docker"
+                # With new macOS priority-based detection, priority order is used
 
     def test_explicit_podman_neither_exists(self):
         with patch("mdify.cli.shutil.which", return_value=None):
             result = detect_runtime("podman", explicit=True)
             assert result is None
+
+    # Tests for new macOS native tool support
+    def test_env_var_override_orbstack(self, monkeypatch):
+        """Test MDIFY_CONTAINER_RUNTIME env var overrides detection."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "orbstack")
+        with patch("mdify.cli.shutil.which") as mock_which:
+            mock_which.return_value = "/usr/local/bin/orbstack"
+            result = detect_runtime(explicit=False)
+            assert result == "/usr/local/bin/orbstack"
+
+    def test_env_var_override_colima(self, monkeypatch):
+        """Test MDIFY_CONTAINER_RUNTIME env var works for colima."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "colima")
+        with patch("mdify.cli.shutil.which") as mock_which:
+            mock_which.return_value = "/usr/local/bin/colima"
+            result = detect_runtime(explicit=False)
+            assert result == "/usr/local/bin/colima"
+
+    def test_env_var_not_found_in_path(self, monkeypatch, capsys):
+        """Test MDIFY_CONTAINER_RUNTIME env var when tool not in PATH."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "orbstack")
+        with patch("mdify.cli.shutil.which", return_value=None):
+            result = detect_runtime(explicit=False)
+            assert result is None
+            captured = capsys.readouterr()
+            assert "MDIFY_CONTAINER_RUNTIME='orbstack' specified but not found in PATH" in captured.err
+
+    def test_env_var_invalid_name(self, monkeypatch, capsys):
+        """Test MDIFY_CONTAINER_RUNTIME with invalid runtime name."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "invalid")
+        with patch("mdify.cli.shutil.which", return_value=None):
+            result = detect_runtime(explicit=False)
+            assert result is None
+            captured = capsys.readouterr()
+            assert "MDIFY_CONTAINER_RUNTIME='invalid' is not supported" in captured.err
+
+    def test_macos_priority_orbstack_first(self, monkeypatch):
+        """Test macOS prefers OrbStack over other tools."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")  # Clear env override
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running") as mock_running:
+                    # Setup: orbstack exists and running
+                    mock_which.side_effect = lambda x: f"/usr/local/bin/{x}" if x == "orbstack" else None
+                    mock_running.return_value = True
+                    result = detect_runtime(explicit=False)
+                    assert result == "/usr/local/bin/orbstack"
+
+    def test_macos_fallback_colima_when_orbstack_not_running(self, monkeypatch):
+        """Test macOS falls back to Colima if OrbStack not running."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running") as mock_running:
+                    # Setup: orbstack exists but not running, colima exists and running
+                    def which_side_effect(x):
+                        if x in ("orbstack", "colima"):
+                            return f"/usr/local/bin/{x}"
+                        return None
+                    
+                    def running_side_effect(path):
+                        return "colima" in path
+                    
+                    mock_which.side_effect = which_side_effect
+                    mock_running.side_effect = running_side_effect
+                    result = detect_runtime(explicit=False)
+                    assert result == "/usr/local/bin/colima"
+
+    def test_non_macos_priority_docker_first(self, monkeypatch):
+        """Test non-macOS prefers Docker over other tools."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Linux"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running") as mock_running:
+                    # Setup: docker and podman exist, docker running
+                    def which_side_effect(x):
+                        if x in ("docker", "podman"):
+                            return f"/usr/bin/{x}"
+                        return None
+                    
+                    def running_side_effect(path):
+                        return "docker" in path
+                    
+                    mock_which.side_effect = which_side_effect
+                    mock_running.side_effect = running_side_effect
+                    result = detect_runtime(explicit=False)
+                    assert result == "/usr/bin/docker"
+
+    def test_macos_priority_apple_container_first(self, monkeypatch):
+        """Test macOS prefers Apple Container over other tools."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running") as mock_running:
+                    # Setup: container exists and running
+                    mock_which.side_effect = lambda x: f"/usr/local/bin/{x}" if x == "container" else None
+                    mock_running.return_value = True
+                    result = detect_runtime(explicit=False)
+                    assert result == "/usr/local/bin/container"
+
+    def test_macos_fallback_orbstack_when_container_not_running(self, monkeypatch):
+        """Test macOS falls back to OrbStack if Apple Container not running."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running") as mock_running:
+                    # Setup: container exists but not running, orbstack exists and running
+                    def which_side_effect(x):
+                        if x in ("container", "orbstack"):
+                            return f"/usr/local/bin/{x}"
+                        return None
+                    
+                    def running_side_effect(path):
+                        return "orbstack" in path
+                    
+                    mock_which.side_effect = which_side_effect
+                    mock_running.side_effect = running_side_effect
+                    result = detect_runtime(explicit=False)
+                    assert result == "/usr/local/bin/orbstack"
+
+    def test_all_tools_exist_but_not_running(self, monkeypatch, capsys):
+        """Test warning when tools exist but none are running."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                with patch("mdify.cli.is_daemon_running", return_value=False):
+                    def which_side_effect(x):
+                        if x in ("orbstack", "colima", "podman", "docker"):
+                            return f"/usr/local/bin/{x}"
+                        return None
+                    
+                    mock_which.side_effect = which_side_effect
+                    result = detect_runtime(explicit=False)
+                    assert result is None
+                    captured = capsys.readouterr()
+                    assert "daemon is not running" in captured.err
+                    assert "orbstack" in captured.err
+                    assert "colima" in captured.err
 
 
 class TestNewCLIArgs:
@@ -673,6 +817,66 @@ class TestFileHandling:
         assert result == output_dir / "doc.md"
 
 
+class TestIsDaemonRunning:
+    """Tests for is_daemon_running() function."""
+
+    def test_daemon_running_returns_true(self):
+        """Test is_daemon_running returns True when daemon is responsive."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = is_daemon_running("/usr/bin/docker")
+        assert result is True
+
+    def test_daemon_not_running_returns_false(self):
+        """Test is_daemon_running returns False when daemon is not responsive."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = is_daemon_running("/usr/bin/docker")
+        assert result is False
+
+    def test_daemon_timeout_returns_false(self):
+        """Test is_daemon_running returns False on timeout."""
+        with patch("mdify.cli.subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 5)):
+            result = is_daemon_running("/usr/bin/docker")
+        assert result is False
+
+    def test_daemon_oserror_returns_false(self):
+        """Test is_daemon_running returns False on OSError."""
+        with patch("mdify.cli.subprocess.run", side_effect=OSError("No such file")):
+            result = is_daemon_running("/usr/bin/nonexistent")
+        assert result is False
+
+    def test_apple_container_daemon_running(self):
+        """Test is_daemon_running uses 'system status' for Apple Container."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = is_daemon_running("/usr/local/bin/container")
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/container", "system", "status"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+
+    def test_apple_container_daemon_not_running(self):
+        """Test is_daemon_running returns False when Apple Container daemon not running."""
+        mock_result = Mock()
+        mock_result.returncode = 1
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = is_daemon_running("/usr/local/bin/container")
+        assert result is False
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/container", "system", "status"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+
+
 class TestContainerRuntime:
     """Tests for container runtime functions."""
 
@@ -873,6 +1077,60 @@ class TestGetStorageRoot:
         with patch("mdify.cli.subprocess.run", return_value=mock_result):
             result = get_storage_root("podman")
         assert result is None
+
+    def test_orbstack_storage_root(self, monkeypatch):
+        """Test get_storage_root returns OrbStack storage root."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/testuser"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/usr/local/bin/orbstack")
+        assert result == f"{home}/.orbstack"
+
+    def test_colima_storage_root(self, monkeypatch):
+        """Test get_storage_root returns Colima storage root."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/testuser"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/usr/local/bin/colima")
+        assert result == f"{home}/.colima"
+
+    def test_orbstack_storage_root_with_full_path(self, monkeypatch):
+        """Test get_storage_root works with full path to OrbStack executable."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/apple"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/opt/homebrew/bin/orbstack")
+        assert result == f"{home}/.orbstack"
+
+    def test_colima_storage_root_with_full_path(self, monkeypatch):
+        """Test get_storage_root works with full path to Colima executable."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/apple"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/opt/homebrew/bin/colima")
+        assert result == f"{home}/.colima"
+
+    def test_apple_container_storage_root(self, monkeypatch):
+        """Test get_storage_root returns Apple Container storage root."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/testuser"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/usr/local/bin/container")
+        assert result == f"{home}/Library/Application Support/com.apple.container"
+
+    def test_apple_container_storage_root_with_full_path(self, monkeypatch):
+        """Test get_storage_root works with full path to Apple Container executable."""
+        from mdify.cli import get_storage_root
+
+        home = "/Users/apple"
+        monkeypatch.setenv("HOME", home)
+        result = get_storage_root("/opt/homebrew/bin/container")
+        assert result == f"{home}/Library/Application Support/com.apple.container"
 
 
 class TestGetImageSizeEstimate:
