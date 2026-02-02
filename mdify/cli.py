@@ -281,6 +281,27 @@ def check_image_exists(runtime: str, image: str) -> bool:
         True if image exists locally.
     """
     try:
+        runtime_name = os.path.basename(runtime)
+        
+        # Apple Container uses 'image-list' command
+        if runtime_name == "container":
+            result = subprocess.run(
+                [runtime, "image-list", "--format", "json"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout:
+                try:
+                    images = json.loads(result.stdout.decode())
+                    # Check if image exists in the list
+                    for img in images:
+                        if img.get("name") == image or image in img.get("repoTags", []):
+                            return True
+                except json.JSONDecodeError:
+                    pass
+            return False
+        
+        # Docker/Podman/OrbStack/Colima use standard 'image inspect'
         result = subprocess.run(
             [runtime, "image", "inspect", image],
             capture_output=True,
@@ -307,6 +328,18 @@ def pull_image(runtime: str, image: str, quiet: bool = False) -> bool:
         print(f"Pulling image: {image}")
 
     try:
+        runtime_name = os.path.basename(runtime)
+        
+        # Apple Container uses 'image-pull' command
+        if runtime_name == "container":
+            result = subprocess.run(
+                [runtime, "image-pull", image],
+                capture_output=quiet,
+                check=False,
+            )
+            return result.returncode == 0
+        
+        # Docker/Podman/OrbStack/Colima use standard 'pull'
         result = subprocess.run(
             [runtime, "pull", image],
             capture_output=quiet,
