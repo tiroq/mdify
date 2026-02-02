@@ -143,6 +143,15 @@ class DoclingContainer:
                 check=False,
             )
 
+    def remove(self) -> None:
+        """Remove container. Safe to call multiple times."""
+        if self.container_name:
+            subprocess.run(
+                [self.runtime, "rm", "-f", self.container_name],
+                capture_output=True,
+                check=False,
+            )
+
     def get_logs(self, tail: int = 50) -> tuple[str, str]:
         """Get container logs for debugging.
 
