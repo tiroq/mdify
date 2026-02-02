@@ -1032,25 +1032,33 @@ def main() -> int:
                                 f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                             )
                             if container_alive:
-                                print(f"    Error: Connection lost (container may be restarting or overloaded)", file=sys.stderr)
+                                print(
+                                    "    Error: Connection lost (server may have crashed and restarted)",
+                                    file=sys.stderr,
+                                )
                             else:
-                                print(f"    Error: Container crashed while processing file", file=sys.stderr)
-                                print(f"    File may be too complex, large, or malformed", file=sys.stderr)
-                            
-                            # Show logs for debugging (whether container is alive or not)
-                            if DEBUG or not container_alive:
-                                print(f"    Retrieving container logs...", file=sys.stderr)
-                                logs = container.get_logs(tail=30)
-                                if logs:
-                                    print(f"    Container logs (last 30 lines):", file=sys.stderr)
-                                    for line in logs.strip().split('\n'):
-                                        print(f"      {line}", file=sys.stderr)
-                                else:
-                                    print(f"    No logs available", file=sys.stderr)
-                            
+                                print(
+                                    "    Error: Container crashed while processing file",
+                                    file=sys.stderr,
+                                )
+                                print(
+                                    "    File may be too complex, large, or malformed",
+                                    file=sys.stderr,
+                                )
+
+                            # Always show logs for connection errors to surface root cause
+                            print("    Retrieving container logs...", file=sys.stderr)
+                            logs = container.get_logs(tail=30)
+                            if logs:
+                                print("    Container logs (last 30 lines):", file=sys.stderr)
+                                for line in logs.strip().split("\n"):
+                                    print(f"      {line}", file=sys.stderr)
+                            else:
+                                print("    No logs available", file=sys.stderr)
+
                             if not container_alive:
-                                print(f"    Stopping remaining conversions", file=sys.stderr)
-                        
+                                print("    Stopping remaining conversions", file=sys.stderr)
+
                         # Stop processing if container is dead
                         if not container_alive:
                             break
