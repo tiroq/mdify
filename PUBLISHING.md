@@ -195,3 +195,45 @@ python -m twine upload dist/*
 - Ensure `build` and `setuptools>=61.0` are installed
 - Check pyproject.toml syntax
 - Verify all required files exist (README.md, LICENSE)
+
+## Testing macOS Native Container Tool Support
+
+Before releasing, test container runtime detection on macOS with different tools:
+
+**Test Apple Container detection:**
+```bash
+MDIFY_CONTAINER_RUNTIME=container mdify test.pdf
+```
+
+**Test Docker detection:**
+```bash
+mdify test.pdf  # Should auto-detect available tool (Apple Container first on macOS 26+)
+```
+
+**Test OrbStack detection:**
+```bash
+MDIFY_CONTAINER_RUNTIME=orbstack mdify test.pdf
+```
+
+**Test Colima detection:**
+```bash
+MDIFY_CONTAINER_RUNTIME=colima mdify test.pdf
+```
+
+**Test Podman detection:**
+```bash
+MDIFY_CONTAINER_RUNTIME=podman mdify test.pdf
+```
+
+**Test daemon status warning:**
+```bash
+# Stop your container daemon and run:
+mdify test.pdf
+# Should display helpful warning about daemon not running
+```
+
+**Test runtime priority order:**
+```bash
+# On macOS, should try OrbStack first, then Colima, then Podman, then Docker
+mdify test.pdf  # Check which tool is being used in output
+```
