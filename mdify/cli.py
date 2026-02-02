@@ -193,30 +193,78 @@ def detect_runtime(preferred: Optional[str] = None, explicit: bool = True) -> Op
     """
     Detect available container runtime.
 
+    First checks MDIFY_CONTAINER_RUNTIME environment variable for explicit override.
+    On macOS, tries native tools first (OrbStack → Colima → Podman → Docker).
+    On other platforms, tries Docker → Podman.
+
     Args:
-        preferred: Preferred runtime ('docker' or 'podman')
-        explicit: If True, warn when falling back to alternative.
-                  If False, silently use alternative without warning.
-                  Note: This only controls warning emission; selection order
-                  is always preferred → alternative regardless of this flag.
+        preferred: Preferred runtime name override (deprecated, use MDIFY_CONTAINER_RUNTIME)
+        explicit: If True, print info about detection/fallback choices.
 
     Returns:
         Path to runtime executable, or None if not found.
     """
-    # Try preferred runtime first
-    runtime_path = shutil.which(preferred)
-    if runtime_path:
-        return runtime_path
-
-    # Try alternative
-    alternative = "podman" if preferred == "docker" else "docker"
-    runtime_path = shutil.which(alternative)
-    if runtime_path:
-        if explicit:
+    # Check for explicit environment variable override
+    env_runtime = os.environ.get("MDIFY_CONTAINER_RUNTIME", "").strip().lower()
+    if env_runtime:
+        if env_runtime not in SUPPORTED_RUNTIMES:
             print(
-                f"Warning: {preferred} not found, using {alternative}", file=sys.stderr
+                f"Warning: MDIFY_CONTAINER_RUNTIME='{env_runtime}' is not supported. "
+                f"Supported: {', '.join(SUPPORTED_RUNTIMES)}",
+                file=sys.stderr,
             )
-        return runtime_path
+        else:
+            runtime_path = shutil.which(env_runtime)
+            if runtime_path:
+                if explicit:
+                    print(f"Using runtime from MDIFY_CONTAINER_RUNTIME: {env_runtime}")
+                return runtime_path
+            else:
+                print(
+                    f"Warning: MDIFY_CONTAINER_RUNTIME='{env_runtime}' specified but not found in PATH",
+                    file=sys.stderr,
+                )
+
+    # Determine runtime priority based on OS
+    is_macos = platform.system() == "Darwin"
+    if is_macos:
+        runtime_priority = MACOS_RUNTIMES_PRIORITY
+        if explicit:
+            print(f"Detected macOS: checking for native container tools...")
+    else:
+        runtime_priority = OTHER_RUNTIMES_PRIORITY
+
+    # Try each runtime in priority order
+    found_but_not_running = []
+    for runtime_name in runtime_priority:
+        runtime_path = shutil.which(runtime_name)
+        if runtime_path:
+            # Check if daemon is running
+            if is_daemon_running(runtime_path):
+                if explicit:
+                    print(f"Using container runtime: {runtime_name}")
+                return runtime_path
+            else:
+                found_but_not_running.append((runtime_name, runtime_path))
+
+    # If we found tools but none are running, warn and ask user to start one
+    if found_but_not_running:
+        print(
+            f"\nWarning: Found container runtime(s) but daemon is not running:",
+            file=sys.stderr,
+        )
+        for runtime_name, runtime_path in found_but_not_running:
+            print(f"  - {runtime_name} ({runtime_path})", file=sys.stderr)
+        print(
+            "\nPlease start one of these tools before running mdify.",
+            file=sys.stderr,
+        )
+        if is_macos:
+            print(
+                "  macOS tip: Start OrbStack, Colima, or Podman Desktop application",
+                file=sys.stderr,
+            )
+        return None
 
     return None
 
