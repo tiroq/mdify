@@ -758,15 +758,14 @@ def main() -> int:
         return 1
 
     # Detect container runtime
-    preferred = args.runtime if args.runtime else "docker"
+    # If --runtime is specified, treat as explicit user choice
     explicit = args.runtime is not None
-    runtime = detect_runtime(preferred, explicit=explicit)
+    runtime = detect_runtime(preferred=args.runtime, explicit=explicit)
     if runtime is None:
         print(
             f"Error: Container runtime not found ({', '.join(SUPPORTED_RUNTIMES)})",
             file=sys.stderr,
         )
-        print("Please install Docker or Podman to use mdify.", file=sys.stderr)
         return 2
 
     # Handle image pull policy
@@ -850,7 +849,8 @@ def main() -> int:
             return 1
     elif args.pull == "never" and not image_exists:
         print(f"Error: Image not found locally: {image}", file=sys.stderr)
-        print(f"Run with --pull=missing or pull manually: {preferred} pull {image}")
+        runtime_name = os.path.basename(runtime)
+        print(f"Run with --pull=missing or pull manually: {runtime_name} pull {image}")
         return 1
 
     # Resolve paths (use absolute() as fallback if resolve() fails due to permissions)
