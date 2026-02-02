@@ -1,3 +1,3 @@
 """mdify - Convert documents to Markdown via Docling container."""
 
-__version__ = "2.9.2"
+__version__ = "2.9.3"
