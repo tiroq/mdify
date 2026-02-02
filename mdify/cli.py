@@ -154,7 +154,42 @@ def check_for_update(force: bool = False) -> None:
 # =============================================================================
 
 
-def detect_runtime(preferred: str, explicit: bool = True) -> Optional[str]:
+def is_daemon_running(runtime: str) -> bool:
+    """
+    Check if a container runtime daemon is running.
+
+    Args:
+        runtime: Path to container runtime executable
+
+    Returns:
+        True if daemon is running and responsive, False otherwise.
+    """
+    try:
+        runtime_name = os.path.basename(runtime)
+        
+        # Apple Container uses 'container system status' to check daemon
+        if runtime_name == "container":
+            result = subprocess.run(
+                [runtime, "system", "status"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            return result.returncode == 0
+        
+        # Other runtimes use --version check
+        result = subprocess.run(
+            [runtime, "--version"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def detect_runtime(preferred: Optional[str] = None, explicit: bool = True) -> Optional[str]:
     """
     Detect available container runtime.
 
