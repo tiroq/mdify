@@ -20,7 +20,14 @@ class DoclingContainer:
         # Container automatically stopped and removed
     """
 
-    def __init__(self, runtime: str, image: str, port: int = 5001, timeout: int = 1200):
+    def __init__(
+        self,
+        runtime: str,
+        image: str,
+        port: int = 5001,
+        timeout: int = 1200,
+        keep_container: bool = False,
+    ):
         """Initialize container manager.
 
         Args:
@@ -28,11 +35,13 @@ class DoclingContainer:
             image: Container image to use
             port: Host port to bind (default: 5001)
             timeout: Conversion timeout in seconds (default: 1200)
+            keep_container: If True, do not auto-remove container (preserve logs)
         """
         self.runtime = runtime
         self.image = image
         self.port = port
         self.timeout = timeout
+        self.keep_container = keep_container
         self.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
         self.container_id: Optional[str] = None
 
@@ -91,7 +100,6 @@ class DoclingContainer:
             self.runtime,
             "run",
             "-d",  # Detached mode
-            "--rm",  # Auto-remove on stop
             "--name",
             self.container_name,
             "-p",
@@ -100,6 +108,8 @@ class DoclingContainer:
             f"DOCLING_SERVE_MAX_SYNC_WAIT={self.timeout}",
             self.image,
         ]
+        if not self.keep_container:
+            cmd.insert(3, "--rm")  # Auto-remove on stop
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
