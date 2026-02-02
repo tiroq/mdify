@@ -978,6 +978,47 @@ class TestContainerRuntime:
         captured = capsys.readouterr()
         assert "Error pulling image" in captured.err
 
+    def test_apple_container_pull_success(self):
+        """Test pull_image uses 'image-pull' for Apple Container."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = pull_image("/usr/local/bin/container", "test-image", quiet=True)
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/container", "image-pull", "test-image"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_apple_container_image_exists(self):
+        """Test check_image_exists uses 'image-list' for Apple Container."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps([
+            {"name": "test-image", "repoTags": ["test-image:latest"]},
+            {"name": "other-image", "repoTags": ["other-image:latest"]}
+        ]).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
+            result = check_image_exists("/usr/local/bin/container", "test-image")
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["/usr/local/bin/container", "image-list", "--format", "json"],
+            capture_output=True,
+            check=False,
+        )
+
+    def test_apple_container_image_not_exists(self):
+        """Test check_image_exists returns False when image not in list."""
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps([
+            {"name": "other-image", "repoTags": ["other-image:latest"]}
+        ]).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = check_image_exists("/usr/local/bin/container", "test-image")
+        assert result is False
+
 
 class TestGetStorageRoot:
     """Tests for get_storage_root() function."""
