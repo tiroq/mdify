@@ -116,11 +116,17 @@ def parse_memory_string(mem_str: str) -> float:
         raise ValueError(f"Invalid memory format: {mem_str}")
 
 
-def validate_memory_availability(required_gb: float) -> tuple[bool, str]:
+def validate_memory_availability(
+    required_gb: float,
+    profile_name: str = "default",
+    suggest_profile: Optional[str] = None,
+) -> tuple[bool, str]:
     """Check if system has sufficient available memory.
     
     Args:
         required_gb: Required memory in GB
+        profile_name: Name of current profile being used
+        suggest_profile: Name of smaller profile to suggest (auto-detected if None)
         
     Returns:
         Tuple of (is_sufficient, error_message)
@@ -132,13 +138,39 @@ def validate_memory_availability(required_gb: float) -> tuple[bool, str]:
         return True, ""
     
     if available_gb < required_gb:
+        # Determine which smaller profile to suggest
+        if suggest_profile is None:
+            if profile_name == "heavy":
+                suggest_profile = "default"
+            elif profile_name == "default":
+                suggest_profile = "minimal"
+            else:
+                suggest_profile = None  # Already on minimal
+        
         error = (
             f"Insufficient memory available for container startup.\n"
+            f"  Current profile: {profile_name}\n"
             f"  Required: {required_gb:.1f} GB\n"
             f"  Available: {available_gb:.1f} GB\n"
             f"  Short by: {required_gb - available_gb:.1f} GB\n\n"
-            f"Please close other applications or use a smaller profile (--profile minimal)"
         )
+        
+        if suggest_profile:
+            suggested = RESOURCE_PROFILES[suggest_profile]
+            error += (
+                f"Suggested solutions:\n"
+                f"  1. Close other applications to free up memory\n"
+                f"  2. Use a smaller profile: --profile {suggest_profile} "
+                f"({suggested['cpus']} CPUs, {suggested['memory']} memory)\n"
+                f"  3. Skip memory check: --skip-memory-check (not recommended)"
+            )
+        else:
+            error += (
+                f"Suggested solutions:\n"
+                f"  1. Close other applications to free up memory\n"
+                f"  2. Skip memory check: --skip-memory-check (not recommended)"
+            )
+        
         return False, error
     
     return True, ""
@@ -1082,7 +1114,7 @@ def main() -> int:
 
     try:
         if not args.quiet:
-            print(f"Starting docling-serve container...\\n")
+            print(f"Starting docling-serve container...\n")
 
         # Apply resource profile
         profile = RESOURCE_PROFILES[args.profile]
@@ -1092,7 +1124,9 @@ def main() -> int:
         # Validate memory availability unless skipped
         if not args.skip_memory_check:
             required_gb = parse_memory_string(memory)
-            is_sufficient, error_msg = validate_memory_availability(required_gb)
+            is_sufficient, error_msg = validate_memory_availability(
+                required_gb, profile_name=args.profile
+            )
             if not is_sufficient:
                 print(f"Error: {error_msg}", file=sys.stderr)
                 return 1
