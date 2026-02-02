@@ -770,6 +770,7 @@ Examples:
 
 def main() -> int:
     """Main entry point for the CLI."""
+    print(f"mdify v{__version__}", file=sys.stderr)
     args = parse_args()
 
     # Handle --check-update flag
