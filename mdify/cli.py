@@ -1061,9 +1061,6 @@ def main() -> int:
                                 f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                             )
                             print(f"    Error: {error_msg}", file=sys.stderr)
-                            f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
-                        )
-                        print(f"    Error: {error_msg}", file=sys.stderr)
 
             total_elapsed = time.time() - conversion_start
 
