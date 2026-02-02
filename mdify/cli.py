@@ -1065,14 +1065,21 @@ def main() -> int:
                                 if not container_alive:
                                     print("    Container crashed - attempting to restart...", file=sys.stderr)
                                     try:
-                                        # Stop the dead container
+                                        # Stop and remove the dead container
                                         container.stop()
+                                        container.remove()
+                                        # Generate new container name to avoid conflicts
+                                        import uuid
+                                        container.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
                                         # Start a new one
                                         container.start(timeout=120)
                                         print("    Container restarted successfully", file=sys.stderr)
                                         print("    Continuing with next file...", file=sys.stderr)
                                     except Exception as restart_error:
                                         print(f"    Failed to restart container: {restart_error}", file=sys.stderr)
+                                        if DEBUG:
+                                            import traceback
+                                            traceback.print_exc()
                                         print("    Stopping remaining conversions", file=sys.stderr)
                                         break
                 except Exception as e:
@@ -1141,14 +1148,21 @@ def main() -> int:
                         if not container_alive:
                             print("    Container crashed - attempting to restart...", file=sys.stderr)
                             try:
-                                # Stop the dead container
+                                # Stop and remove the dead container
                                 container.stop()
+                                container.remove()
+                                # Generate new container name to avoid conflicts
+                                import uuid
+                                container.container_name = f"mdify-serve-{uuid.uuid4().hex[:8]}"
                                 # Start a new one
                                 container.start(timeout=120)
                                 print("    Container restarted successfully", file=sys.stderr)
                                 print("    Continuing with next file...", file=sys.stderr)
                             except Exception as restart_error:
                                 print(f"    Failed to restart container: {restart_error}", file=sys.stderr)
+                                if DEBUG:
+                                    import traceback
+                                    traceback.print_exc()
                                 print("    Stopping remaining conversions", file=sys.stderr)
                                 break
                     else:
