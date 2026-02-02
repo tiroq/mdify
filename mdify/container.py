@@ -135,17 +135,17 @@ class DoclingContainer:
                 check=False,
             )
 
-    def get_logs(self, tail: int = 50) -> str:
+    def get_logs(self, tail: int = 50) -> tuple[str, str]:
         """Get container logs for debugging.
 
         Args:
             tail: Number of lines to retrieve from end of logs
 
         Returns:
-            Container logs as string
+            Tuple of (stdout, stderr) from container logs
         """
         if not self.container_name:
-            return ""
+            return ("", "No container name set")
         
         try:
             result = subprocess.run(
@@ -154,9 +154,13 @@ class DoclingContainer:
                 text=True,
                 check=False,
             )
-            return result.stdout if result.returncode == 0 else ""
-        except Exception:
-            return ""
+            if result.returncode != 0:
+                return ("", f"Failed to get logs (exit {result.returncode}): {result.stderr}")
+            # Container logs come from both stdout and stderr
+            combined = result.stdout + result.stderr
+            return (combined, "")
+        except Exception as e:
+            return ("", f"Exception getting logs: {e}")
 
     def is_running(self) -> bool:
         """Check if container process is still running.
