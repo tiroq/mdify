@@ -38,6 +38,9 @@ SUPPORTED_RUNTIMES = ("docker", "podman", "orbstack", "colima", "container")
 MACOS_RUNTIMES_PRIORITY = ("container", "orbstack", "colima", "podman", "docker")
 OTHER_RUNTIMES_PRIORITY = ("docker", "podman")
 
+# Debug mode
+DEBUG = os.environ.get("MDIFY_DEBUG", "").lower() in ("1", "true", "yes")
+
 
 # =============================================================================
 # Update checking functions
@@ -983,6 +986,9 @@ def main() -> int:
                 start_time = time.time()
                 try:
                     # Convert via HTTP API
+                    if DEBUG:
+                        print(f"    DEBUG: Converting {input_file.name} via {container.base_url}/v1/convert/file", file=sys.stderr)
+                    
                     result = convert_file(
                         container.base_url, input_file, to_format="md"
                     )
@@ -1023,7 +1029,15 @@ def main() -> int:
                                 print(
                                     f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
                                 )
-                                print(f"    Error: Container crashed (file may be too complex or large)", file=sys.stderr)
+                                print(f"    Error: Container crashed while processing file", file=sys.stderr)
+                                print(f"    File may be too complex, large, or malformed", file=sys.stderr)
+                                print(f"    Retrieving container logs...", file=sys.stderr)
+                                # Get last 20 lines of container logs for debugging
+                                logs = container.get_logs(tail=20)
+                                if logs:
+                                    print(f"    Container logs (last 20 lines):", file=sys.stderr)
+                                    for line in logs.strip().split('\n'):
+                                        print(f"      {line}", file=sys.stderr)
                                 print(f"    Stopping remaining conversions", file=sys.stderr)
                             break
                     
