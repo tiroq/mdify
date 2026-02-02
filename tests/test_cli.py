@@ -995,12 +995,19 @@ class TestContainerRuntime:
         """Test check_image_exists uses 'image list' for Apple Container."""
         mock_result = Mock()
         mock_result.returncode = 0
+        # Use actual Apple Container response format with 'reference' field
         mock_result.stdout = json.dumps([
-            {"name": "test-image", "repoTags": ["test-image:latest"]},
-            {"name": "other-image", "repoTags": ["other-image:latest"]}
+            {
+                "reference": "ghcr.io/docling-project/docling-serve-cpu:main",
+                "descriptor": {
+                    "size": 1609,
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "digest": "sha256:25e82dfa30371d17a0af17edc42261a4b9bedb37f0f337887c366184bc3ee291"
+                }
+            }
         ]).encode()
         with patch("mdify.cli.subprocess.run", return_value=mock_result) as mock_run:
-            result = check_image_exists("/usr/local/bin/container", "test-image")
+            result = check_image_exists("/usr/local/bin/container", "ghcr.io/docling-project/docling-serve-cpu:main")
         assert result is True
         mock_run.assert_called_once_with(
             ["/usr/local/bin/container", "image", "list", "--format", "json"],
@@ -1013,10 +1020,17 @@ class TestContainerRuntime:
         mock_result = Mock()
         mock_result.returncode = 0
         mock_result.stdout = json.dumps([
-            {"name": "other-image", "repoTags": ["other-image:latest"]}
+            {
+                "reference": "ghcr.io/other-project/other-image:latest",
+                "descriptor": {
+                    "size": 1234,
+                    "mediaType": "application/vnd.oci.image.index.v1+json",
+                    "digest": "sha256:abcd1234"
+                }
+            }
         ]).encode()
         with patch("mdify.cli.subprocess.run", return_value=mock_result):
-            result = check_image_exists("/usr/local/bin/container", "test-image")
+            result = check_image_exists("/usr/local/bin/container", "ghcr.io/docling-project/docling-serve-cpu:main")
         assert result is False
 
 

@@ -294,8 +294,10 @@ def check_image_exists(runtime: str, image: str) -> bool:
                 try:
                     images = json.loads(result.stdout.decode())
                     # Check if image exists in the list
+                    # Apple Container returns format: [{"reference": "image:tag", "descriptor": {...}}]
                     for img in images:
-                        if img.get("name") == image or image in img.get("repoTags", []):
+                        reference = img.get("reference", "")
+                        if reference == image or reference.startswith(f"{image}:"):
                             return True
                 except json.JSONDecodeError:
                     pass
