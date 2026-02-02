@@ -955,7 +955,13 @@ def main() -> int:
             print(f"Starting docling-serve container...")
             print()
 
-        with DoclingContainer(runtime, image, args.port, timeout=timeout) as container:
+        with DoclingContainer(
+            runtime,
+            image,
+            args.port,
+            timeout=timeout,
+            keep_container=DEBUG,
+        ) as container:
             # Convert files
             conversion_start = time.time()
             spinner = Spinner()
@@ -1055,6 +1061,11 @@ def main() -> int:
                                     print(f"      {line}", file=sys.stderr)
                             else:
                                 print("    No logs available", file=sys.stderr)
+                                if not DEBUG:
+                                    print(
+                                        "    Tip: re-run with MDIFY_DEBUG=1 to preserve container logs",
+                                        file=sys.stderr,
+                                    )
 
                             if not container_alive:
                                 print("    Stopping remaining conversions", file=sys.stderr)
