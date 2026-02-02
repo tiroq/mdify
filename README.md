@@ -11,7 +11,10 @@ A lightweight CLI for converting documents to Markdown. The CLI is fast to insta
 ## Requirements
 
 - **Python 3.8+**
-- **Docker** or **Podman** (for document conversion)
+- **Docker**, **Podman**, or native macOS container tools (for document conversion)
+  - On macOS: Supports Apple Container (macOS 26+), OrbStack, Colima, Podman, or Docker Desktop
+  - On Linux: Docker or Podman
+  - Auto-detects available tools
 
 ## Installation
 
@@ -24,6 +27,13 @@ pipx install mdify-cli
 ```
 
 Restart your terminal after installation.
+
+For containerized document conversion, install one of these (or use Docker Desktop):
+- **Apple Container** (macOS 26+): Download from https://github.com/apple/container/releases
+- **OrbStack** (recommended): `brew install orbstack`
+- **Colima**: `brew install colima && colima start`
+- **Podman**: `brew install podman && podman machine init && podman machine start`
+- **Docker Desktop**: Available at https://www.docker.com/products/docker-desktop
 
 ### Linux
 
@@ -111,13 +121,50 @@ The first conversion takes longer (~30-60s) as the container loads ML models int
 | `-m, --mask` | ⚠️ **Deprecated**: PII masking not supported in current version |
 | `--gpu` | Use GPU-accelerated container (requires NVIDIA GPU and nvidia-container-toolkit) |
 | `--port PORT` | Container port (default: 5001) |
-| `--runtime RUNTIME` | Container runtime: docker or podman (auto-detected) |
+| `--runtime RUNTIME` | Container runtime: docker, podman, orbstack, colima, or container (auto-detected) |
 | `--image IMAGE` | Custom container image (default: ghcr.io/docling-project/docling-serve-cpu:main) |
 | `--pull POLICY` | Image pull policy: always, missing, never (default: missing) |
 | `--check-update` | Check for available updates and exit |
 | `--version` | Show version and exit |
 
-### Flat Mode
+### Container Runtime Selection
+
+mdify automatically detects and uses the best available container runtime. The detection order differs by platform:
+
+**macOS (recommended):**
+1. Apple Container (native, macOS 26+ required)
+2. OrbStack (lightweight, fast)
+3. Colima (open-source alternative)
+4. Podman (via Podman machine)
+5. Docker Desktop (full Docker)
+
+**Linux:**
+1. Docker
+2. Podman
+
+**Override runtime:**
+Use the `MDIFY_CONTAINER_RUNTIME` environment variable to force a specific runtime:
+
+```bash
+export MDIFY_CONTAINER_RUNTIME=orbstack
+mdify document.pdf
+```
+
+Or inline:
+```bash
+MDIFY_CONTAINER_RUNTIME=colima mdify document.pdf
+```
+
+**Supported values:** `docker`, `podman`, `orbstack`, `colima`, `container`
+
+If the selected runtime is installed but not running, mdify will display a helpful warning:
+```
+Warning: Found container runtime(s) but daemon is not running:
+  - orbstack (/opt/homebrew/bin/orbstack)
+
+Please start one of these tools before running mdify.
+macOS tip: Start OrbStack, Colima, or Podman Desktop application
+```
 
 With `--flat`, all output files are placed directly in the output directory. Directory paths are incorporated into filenames to prevent collisions:
 
