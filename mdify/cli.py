@@ -388,7 +388,7 @@ def get_free_space(path: str) -> int:
 
 def get_storage_root(runtime: str) -> Optional[str]:
     """
-    Get the storage root directory for Docker or Podman.
+    Get the storage root directory for Docker, Podman, OrbStack, or Colima.
 
     Args:
         runtime: Path to container runtime executable
@@ -417,6 +417,18 @@ def get_storage_root(runtime: str) -> Optional[str]:
             if result.stdout:
                 info = json.loads(result.stdout.decode())
                 return info.get("store", {}).get("graphRoot")
+        elif runtime_name == "orbstack":
+            # OrbStack stores containers in ~/.orbstack
+            home = os.path.expanduser("~")
+            return os.path.join(home, ".orbstack")
+        elif runtime_name == "colima":
+            # Colima stores containers in ~/.colima
+            home = os.path.expanduser("~")
+            return os.path.join(home, ".colima")
+        elif runtime_name == "container":
+            # Apple Container stores data in Application Support
+            home = os.path.expanduser("~")
+            return os.path.join(home, "Library", "Application Support", "com.apple.container")
         return None
     except (OSError, json.JSONDecodeError):
         return None
