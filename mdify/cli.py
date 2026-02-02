@@ -918,6 +918,8 @@ def main() -> int:
 
     if not args.quiet:
         print(f"Found {total_files} file(s) to convert ({format_size(total_size)})")
+        print(f"Source: {input_path.resolve()}")
+        print(f"Output: {output_dir.resolve()}")
         print(f"Using runtime: {runtime}")
         print(f"Using image: {image}")
         print()
