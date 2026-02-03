@@ -66,6 +66,18 @@ class SSHConfig:
     
     def __post_init__(self):
         """Validate config after initialization."""
+        if self.port is None:
+            self.port = 22
+        if self.timeout is None:
+            self.timeout = 30
+        if self.keepalive is None:
+            self.keepalive = 60
+        if self.compression is None:
+            self.compression = False
+        if self.work_dir is None:
+            self.work_dir = "/tmp/mdify"
+        if self.username is None:
+            self.username = ""
         if not self.host:
             raise ConfigError("host is required")
         if not 1 <= self.port <= 65535:
