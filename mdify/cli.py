@@ -1056,16 +1056,15 @@ def main_async_remote(args) -> int:
         
         # Build SSH config from CLI arguments and SSH config files
         try:
-            # Start with defaults, then layer configs with increasing precedence
-            # Precedence order (lowest to highest): SSH config -> mdify remote.conf -> CLI args
-            ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
+            # Build config with proper precedence (lowest to highest):
+            # SSH config -> mdify remote.conf -> CLI args
+            ssh_config = None
             
             if not args.remote_skip_ssh_config:
                 # Load from SSH config if host looks like an alias
                 if not args.remote_host.replace('.', '').replace('-', '').isdigit():
                     try:
-                        ssh_from_config = SSHConfig.from_ssh_config(args.remote_host)
-                        ssh_config = ssh_from_config
+                        ssh_config = SSHConfig.from_ssh_config(args.remote_host)
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load SSH config for {args.remote_host}: {e}", file=sys.stderr)
@@ -1075,10 +1074,17 @@ def main_async_remote(args) -> int:
                 if mdify_remote_conf and Path(mdify_remote_conf).exists():
                     try:
                         ssh_from_mdify = SSHConfig.from_remote_conf(str(mdify_remote_conf))
-                        ssh_config = ssh_config.merge(ssh_from_mdify)
+                        if ssh_config:
+                            ssh_config = ssh_config.merge(ssh_from_mdify)
+                        else:
+                            ssh_config = ssh_from_mdify
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load mdify remote config: {e}", file=sys.stderr)
+            
+            # Start with minimal defaults if no config loaded
+            if ssh_config is None:
+                ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
             
             # Apply CLI arguments with highest precedence
             cli_config = SSHConfig(
