@@ -1050,21 +1050,9 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
-        enable_color = sys.stderr.isatty() and not os.environ.get("NO_COLOR")
+        from mdify.formatting import Colorizer
 
-        def colorize(text: str, code: str) -> str:
-            if not enable_color:
-                return text
-            return f"\033[{code}m{text}\033[0m"
-
-        def green(text: str) -> str:
-            return colorize(text, "32")
-
-        def yellow(text: str) -> str:
-            return colorize(text, "33")
-
-        def cyan(text: str) -> str:
-            return colorize(text, "36")
+        color = Colorizer(sys.stderr)
         
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
@@ -1254,7 +1242,7 @@ def main_async_remote(args) -> int:
                 for idx, input_file in enumerate(files_to_convert, 1):
                     if not args.quiet:
                         print(
-                            f"\n{cyan(f'[{idx}/{len(files_to_convert)}] Processing:')} {input_file.name}",
+                            f"\n{color.cyan(f'[{idx}/{len(files_to_convert)}] Processing:')} {input_file.name}",
                             file=sys.stderr,
                         )
                     
@@ -1263,7 +1251,7 @@ def main_async_remote(args) -> int:
                         remote_file_path = f"{work_dir}/{input_file.name}"
                         
                         if not args.quiet:
-                            print(f"  {cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
+                            print(f"  {color.cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
                         
                         await transfer_manager.upload_file(
                             local_path=str(input_file),
@@ -1272,11 +1260,11 @@ def main_async_remote(args) -> int:
                         )
                         
                         if not args.quiet:
-                            print(f"  {green('✓ Upload complete')}", file=sys.stderr)
+                            print(f"  {color.green('✓ Upload complete')}", file=sys.stderr)
                         
                         # Convert via remote container
                         if not args.quiet:
-                            print(f"  {cyan('Converting via remote container')}...", file=sys.stderr)
+                            print(f"  {color.cyan('Converting via remote container')}...", file=sys.stderr)
                         
                         # Determine output path
                         output_dir = Path(args.out_dir)
@@ -1298,7 +1286,7 @@ def main_async_remote(args) -> int:
                         if output_file.exists() and not args.overwrite:
                             if not args.quiet:
                                 print(
-                                    f"  {yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
+                                    f"  {color.yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
                                     file=sys.stderr,
                                 )
                             continue
