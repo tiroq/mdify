@@ -47,6 +47,9 @@ class AsyncSSHClient:
                     "connect_timeout": self.config.timeout,
                     "known_hosts": None,  # Skip host key verification for now
                 }
+
+                if self.config.keepalive:
+                    connect_kwargs["keepalive_interval"] = self.config.keepalive
                 
                 # Add username if provided
                 if self.config.username:
