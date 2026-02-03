@@ -914,6 +914,97 @@ Examples:
         help="Skip memory availability validation (not recommended)",
     )
 
+    # SSH/Remote server options
+    ssh_group = parser.add_argument_group("Remote SSH Server", "Execute conversion on remote server via SSH")
+    
+    ssh_group.add_argument(
+        "--remote-host",
+        type=str,
+        default=None,
+        help="SSH host or alias (e.g., tsrv, 192.168.1.200, or SSH config alias)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-port",
+        type=int,
+        default=None,
+        help="SSH port (default: 22 or from SSH config)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-user",
+        type=str,
+        default=None,
+        help="SSH username (default: from SSH config or system user)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-key",
+        type=str,
+        default=None,
+        help="SSH private key path (default: ~/.ssh/id_rsa or from SSH config)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-key-passphrase",
+        type=str,
+        default=None,
+        help="SSH key passphrase (not recommended; use SSH agent)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-timeout",
+        type=int,
+        default=30,
+        help="SSH connection timeout in seconds (default: 30)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-work-dir",
+        type=str,
+        default="/tmp/mdify-remote",
+        help="Work directory on remote server (default: /tmp/mdify-remote)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-runtime",
+        type=str,
+        choices=("docker", "podman"),
+        default=None,
+        help="Container runtime on remote (docker or podman; auto-detect if not specified)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-config",
+        type=str,
+        default=None,
+        help="Path to mdify remote config file (YAML format, default: ~/.mdify/remote.conf)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-skip-ssh-config",
+        action="store_true",
+        help="Skip loading SSH config (use CLI arguments only)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-skip-validation",
+        action="store_true",
+        help="Skip remote resource validation (not recommended)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-validate-only",
+        action="store_true",
+        help="Validate remote connection and resources, then exit",
+    )
+
+    ssh_group.add_argument(
+        "--remote-debug",
+        action="store_true",
+        help="Enable debug logging for remote SSH operations",
+    )
+
     # Utility options
     parser.add_argument(
         "--check-update",
@@ -928,6 +1019,442 @@ Examples:
     )
 
     return parser.parse_args()
+
+
+# =============================================================================
+# Remote SSH execution support
+# =============================================================================
+
+
+def main_async_remote(args) -> int:
+    """Execute conversion on remote server via SSH.
+    
+    This function handles:
+    1. Loading and merging SSH configuration
+    2. Establishing remote connection
+    3. Uploading input files
+    4. Executing remote conversion
+    5. Downloading output files
+    6. Cleanup on success or failure
+    
+    Args:
+        args: Parsed command-line arguments with remote_* options
+        
+    Returns:
+        Exit code (0 for success, non-zero for errors)
+    """
+    import asyncio
+    from pathlib import Path
+    from mdify.ssh import SSHConfig, AsyncSSHClient
+    from mdify.ssh.models import SSHConnectionError, SSHAuthError, ConfigError, ValidationError
+    
+    async def async_main() -> int:
+        """Async implementation of remote conversion."""
+        
+        # Resolve timeout value: CLI > env > default 1200
+        timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
+        
+        # Build SSH config from CLI arguments and SSH config files
+        try:
+            # Build config with proper precedence (lowest to highest):
+            # SSH config -> mdify remote.conf -> CLI args
+            ssh_config = None
+            
+            if not args.remote_skip_ssh_config:
+                # Load from SSH config if host looks like an alias
+                if not args.remote_host.replace('.', '').replace('-', '').isdigit():
+                    try:
+                        ssh_config = SSHConfig.from_ssh_config(args.remote_host)
+                    except Exception as e:
+                        if not args.quiet:
+                            print(f"Warning: Could not load SSH config for {args.remote_host}: {e}", file=sys.stderr)
+                
+                # Load from mdify remote.conf if it exists
+                mdify_remote_conf = args.remote_config or (Path.home() / ".mdify" / "remote.conf")
+                if mdify_remote_conf and Path(mdify_remote_conf).exists():
+                    try:
+                        ssh_from_mdify = SSHConfig.from_remote_conf(str(mdify_remote_conf))
+                        if ssh_config:
+                            ssh_config = ssh_config.merge(ssh_from_mdify)
+                        else:
+                            ssh_config = ssh_from_mdify
+                    except Exception as e:
+                        if not args.quiet:
+                            print(f"Warning: Could not load mdify remote config: {e}", file=sys.stderr)
+            
+            # Start with minimal defaults if no config loaded
+            if ssh_config is None:
+                ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
+            
+            # Apply CLI arguments with highest precedence
+            cli_config = SSHConfig(
+                host=args.remote_host,
+                port=args.remote_port,
+                username=args.remote_user,
+                key_file=args.remote_key,
+                key_passphrase=args.remote_key_passphrase,
+                timeout=args.remote_timeout,
+                work_dir=args.remote_work_dir,
+                container_runtime=args.remote_runtime,
+            )
+            ssh_config = ssh_config.merge(cli_config)
+            
+            # Create SSH client
+            ssh_client = AsyncSSHClient(ssh_config)
+            
+            # Connect to remote server
+            if not args.quiet:
+                print(f"Connecting to {ssh_config.host}:{ssh_config.port}...", file=sys.stderr)
+            
+            await ssh_client.connect()
+            
+            if not args.quiet:
+                print(f"✓ Connected to {ssh_config.host}", file=sys.stderr)
+            
+            # Validate remote resources if not skipped
+            if not args.remote_skip_validation:
+                if not args.quiet:
+                    print("Validating remote resources...", file=sys.stderr)
+                
+                validation_result = await ssh_client.validate_remote_resources()
+                
+                if not validation_result.get("can_connect"):
+                    await ssh_client.disconnect()
+                    print("Error: Cannot connect to remote server", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("work_dir_writable"):
+                    await ssh_client.disconnect()
+                    print(f"Error: Work directory not writable: {ssh_config.work_dir}", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("container_runtime_available"):
+                    await ssh_client.disconnect()
+                    runtime_str = ssh_config.container_runtime or "docker/podman"
+                    print(f"Error: Container runtime not available: {runtime_str}", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("disk_space_min_5gb"):
+                    print(f"Warning: Less than 5GB available on remote", file=sys.stderr)
+                    if not args.yes and sys.stdin.isatty():
+                        if not confirm_proceed("Continue anyway?"):
+                            await ssh_client.disconnect()
+                            return 130
+                
+                if not validation_result.get("memory_min_2gb"):
+                    print(f"Warning: Less than 2GB available memory on remote", file=sys.stderr)
+                    if not args.yes and sys.stdin.isatty():
+                        if not confirm_proceed("Continue anyway?"):
+                            await ssh_client.disconnect()
+                            return 130
+                
+                if not args.quiet:
+                    print("✓ All remote resources validated", file=sys.stderr)
+            
+            # If --remote-validate-only, exit here
+            if args.remote_validate_only:
+                await ssh_client.disconnect()
+                print("Remote validation successful", file=sys.stderr)
+                return 0
+            
+            # Phase 2.4.2: File upload, remote conversion, and download
+            
+            # Build file list
+            input_path = Path(args.input)
+            if not input_path.exists():
+                await ssh_client.disconnect()
+                print(f"Error: Input file or directory not found: {args.input}", file=sys.stderr)
+                return 1
+            
+            files_to_convert = get_files_to_convert(input_path.resolve(), args.glob, args.recursive)
+            
+            if not files_to_convert:
+                await ssh_client.disconnect()
+                print(f"Error: No supported files found in {args.input}", file=sys.stderr)
+                print(f"  Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
+                return 1
+            
+            if not args.quiet:
+                print(f"\nFound {len(files_to_convert)} file(s) to convert", file=sys.stderr)
+            
+            # Import remote container and transfer manager
+            from mdify.ssh.transfer import FileTransferManager
+            from mdify.ssh.remote_container import RemoteContainer
+            
+            # Determine container runtime and image
+            runtime = ssh_config.container_runtime
+            if not runtime:
+                runtime = await ssh_client.check_container_runtime()
+                if not runtime:
+                    await ssh_client.disconnect()
+                    print("Error: No container runtime found on remote (docker/podman)", file=sys.stderr)
+                    return 1
+            
+            if args.gpu:
+                image = GPU_IMAGE
+            elif args.image:
+                image = args.image
+            else:
+                image = DEFAULT_IMAGE
+            
+            # Create remote container
+            remote_container = RemoteContainer(
+                ssh_client=ssh_client,
+                image=image,
+                port=args.port,
+                runtime=runtime,
+                name=f"mdify-remote-{int(time.time())}",
+                timeout=timeout,
+            )
+            
+            # Create file transfer manager
+            transfer_manager = FileTransferManager(ssh_client)
+            
+            # Create remote work directory
+            work_dir = ssh_config.work_dir or "/tmp/mdify-remote"
+            stdout, stderr, code = await ssh_client.run_command(f"mkdir -p {work_dir}")
+            if code != 0:
+                await ssh_client.disconnect()
+                print(f"Error: Failed to create remote work directory: {work_dir}", file=sys.stderr)
+                return 1
+            
+            # Start remote container
+            if not args.quiet:
+                print(f"\nStarting remote container ({image})...", file=sys.stderr)
+            
+            try:
+                await remote_container.start()
+                if not args.quiet:
+                    print(f"✓ Container started: {remote_container.state.container_name}", file=sys.stderr)
+            except Exception as e:
+                await ssh_client.disconnect()
+                print(f"Error: Failed to start remote container: {e}", file=sys.stderr)
+                return 1
+            
+            # Process files
+            successful = 0
+            failed = 0
+            
+            try:
+                for idx, input_file in enumerate(files_to_convert, 1):
+                    if not args.quiet:
+                        print(f"\n[{idx}/{len(files_to_convert)}] Processing: {input_file.name}", file=sys.stderr)
+                    
+                    try:
+                        # Upload file
+                        remote_file_path = f"{work_dir}/{input_file.name}"
+                        
+                        if not args.quiet:
+                            print(f"  Uploading to {remote_file_path}...", file=sys.stderr)
+                        
+                        await transfer_manager.upload_file(
+                            local_path=str(input_file),
+                            remote_path=remote_file_path,
+                            overwrite=True,
+                        )
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Upload complete", file=sys.stderr)
+                        
+                        # Convert via remote container
+                        if not args.quiet:
+                            print(f"  Converting via remote container...", file=sys.stderr)
+                        
+                        # Determine output path
+                        output_dir = Path(args.out_dir)
+                        
+                        # Preserve directory structure if not flat
+                        if not args.flat and input_path.is_dir():
+                            try:
+                                rel_path = input_file.relative_to(input_path)
+                                output_subdir = output_dir / rel_path.parent
+                            except ValueError:
+                                output_subdir = output_dir
+                        else:
+                            output_subdir = output_dir
+                        
+                        output_subdir.mkdir(parents=True, exist_ok=True)
+                        output_file = output_subdir / f"{input_file.stem}.md"
+                        
+                        # Check if output exists and skip if not overwrite
+                        if output_file.exists() and not args.overwrite:
+                            if not args.quiet:
+                                print(f"  ⊘ Skipped: {output_file} already exists (use --overwrite to replace)", file=sys.stderr)
+                            continue
+                        
+                        # Convert using remote container's HTTP API
+                        # The docling-serve API expects:
+                        # - Endpoint: /v1/convert/file
+                        # - Method: POST with multipart/form-data
+                        # - File field: "files" (note the plural)
+                        # - Additional fields: to_formats=md, do_ocr=true
+                        remote_output_path = f"{work_dir}/{input_file.stem}.md"
+                        
+                        # Build conversion command on remote - use -F for multipart form data
+                        convert_cmd = (
+                            f"curl -X POST "
+                            f"-F 'files=@{remote_file_path}' "
+                            f"-F 'to_formats=md' "
+                            f"-F 'do_ocr=true' "
+                        )
+                        if args.mask:
+                            convert_cmd += f"-F 'mask=true' "
+                        convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
+                        
+                        stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                        
+                        if code != 0:
+                            print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
+                            failed += 1
+                            continue
+                        
+                        # Parse JSON response to extract markdown content
+                        try:
+                            response_data = json.loads(stdout)
+                            
+                            # Extract content from response structure
+                            # Actual format: {"document": {"md_content": "..."}, "status": "success"}
+                            if "document" in response_data:
+                                document = response_data["document"]
+                                if "md_content" in document and document["md_content"]:
+                                    markdown_content = document["md_content"]
+                                elif "text_content" in document and document["text_content"]:
+                                    markdown_content = document["text_content"]
+                                else:
+                                    # Fallback - use whole document
+                                    markdown_content = json.dumps(document, indent=2)
+                            else:
+                                # Legacy format fallback
+                                if "results" in response_data and response_data["results"]:
+                                    result = response_data["results"][0]
+                                    if "content" in result:
+                                        content = result["content"]
+                                        if isinstance(content, dict) and "markdown" in content:
+                                            markdown_content = content["markdown"]
+                                        elif isinstance(content, str):
+                                            markdown_content = content
+                                        else:
+                                            markdown_content = str(content)
+                                    else:
+                                        markdown_content = str(result)
+                                else:
+                                    # Ultimate fallback
+                                    markdown_content = stdout
+                            
+                            # Write markdown content to remote file
+                            write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
+                            _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                            
+                            if write_code != 0:
+                                print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                                failed += 1
+                                continue
+                            
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                            if DEBUG:
+                                print(f"  Response: {stdout[:500]}", file=sys.stderr)
+                            failed += 1
+                            continue
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Conversion complete", file=sys.stderr)
+                        
+                        # Download result
+                        if not args.quiet:
+                            print(f"  Downloading result to {output_file}...", file=sys.stderr)
+                        
+                        await transfer_manager.download_file(
+                            remote_path=remote_output_path,
+                            local_path=str(output_file),
+                            overwrite=True,
+                        )
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
+                        
+                        successful += 1
+                        
+                        # Cleanup remote files
+                        await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
+                        
+                    except Exception as e:
+                        print(f"  ✗ Failed: {e}", file=sys.stderr)
+                        if DEBUG:
+                            import traceback
+                            traceback.print_exc(file=sys.stderr)
+                        failed += 1
+                        continue
+            
+            finally:
+                # Stop and remove container
+                if not args.quiet:
+                    print(f"\nStopping remote container...", file=sys.stderr)
+                
+                try:
+                    await remote_container.stop(force=False)
+                    if not args.quiet:
+                        print(f"✓ Container stopped", file=sys.stderr)
+                except Exception as e:
+                    if not args.quiet:
+                        print(f"Warning: Failed to stop container: {e}", file=sys.stderr)
+                
+                # Cleanup remote work directory
+                try:
+                    await ssh_client.run_command(f"rm -rf {work_dir}")
+                    if not args.quiet:
+                        print(f"✓ Cleaned up remote directory", file=sys.stderr)
+                except Exception as e:
+                    if not args.quiet:
+                        print(f"Warning: Failed to cleanup remote directory: {e}", file=sys.stderr)
+                
+                # Disconnect
+                await ssh_client.disconnect()
+            
+            # Print summary
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"Remote conversion complete:", file=sys.stderr)
+            print(f"  Successful: {successful}", file=sys.stderr)
+            print(f"  Failed:     {failed}", file=sys.stderr)
+            print(f"  Total:      {len(files_to_convert)}", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
+            
+            return 0 if failed == 0 else 1
+        
+        except SSHAuthError as e:
+            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
+            return 1
+        except SSHConnectionError as e:
+            print(f"Error: SSH connection failed: {e}", file=sys.stderr)
+            if hasattr(e, 'host') and hasattr(e, 'port'):
+                print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
+            return 1
+        except ConfigError as e:
+            print(f"Error: Configuration error: {e}", file=sys.stderr)
+            return 1
+        except ValidationError as e:
+            print(f"Error: Validation error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error: Unexpected error during remote execution: {e}", file=sys.stderr)
+            if DEBUG:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+            return 1
+    
+    # Run async main
+    try:
+        return asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\n⚠ Interrupted by user", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"Error: Failed to run remote execution: {e}", file=sys.stderr)
+        if DEBUG:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 # =============================================================================
@@ -947,6 +1474,21 @@ def main() -> int:
 
     # Check for updates (daily, silent on errors)
     check_for_update(force=False)
+
+    # Detect remote mode (SSH-based execution)
+    is_remote_mode = hasattr(args, 'remote_host') and args.remote_host is not None
+    
+    if is_remote_mode:
+        # Remote mode: will use SSH to execute on remote server
+        # Import here to avoid import errors if asyncssh not installed in local environment
+        try:
+            import asyncio
+            from mdify.ssh import AsyncSSHClient, SSHConfig
+            return main_async_remote(args)
+        except ImportError:
+            print("Error: Remote mode requires asyncssh and additional dependencies", file=sys.stderr)
+            print("Install with: pip install mdify-cli[remote]", file=sys.stderr)
+            return 1
 
     # Resolve timeout value: CLI > env > default 1200
     timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))

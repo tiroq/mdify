@@ -221,10 +221,6 @@ class DoclingContainer:
             True if container is healthy, False otherwise
         """
         try:
-            # First check if container is still running
-            if not self.is_running():
-                return False
-            # Then check health endpoint
             return check_health(self.base_url)
         except Exception:
             return False

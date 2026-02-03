@@ -89,6 +89,72 @@ mdify --gpu documents/*.pdf
 
 Requires NVIDIA GPU with CUDA support and nvidia-container-toolkit.
 
+### 🚀 Remote Server Execution (SSH)
+
+**NEW:** Convert documents on remote servers via SSH to offload resource-intensive processing:
+
+```bash
+# Basic remote conversion
+mdify document.pdf --remote-host server.example.com
+
+# Use SSH config alias
+mdify document.pdf --remote-host production
+
+# With custom configuration
+mdify docs/*.pdf --remote-host 192.168.1.100 \
+  --remote-user admin \
+  --remote-key ~/.ssh/id_rsa
+
+# Validate remote server before processing
+mdify document.pdf --remote-host server --remote-validate-only
+```
+
+**How it works:**
+1. Connects to remote server via SSH
+2. Validates remote resources (disk space, memory, Docker/Podman)
+3. Uploads files via SFTP
+4. Starts remote container automatically
+5. Converts documents on remote server
+6. Downloads results via SFTP
+7. Cleans up remote files and stops container
+
+**Requirements:**
+- SSH key authentication (password auth not supported for security)
+- Docker or Podman installed on remote server
+- Minimum 5GB disk space and 2GB RAM on remote
+
+**SSH Configuration:**
+
+Create `~/.mdify/remote.conf` for reusable settings:
+```yaml
+host: production.example.com
+port: 22
+username: deploy
+key_file: ~/.ssh/deploy_key
+work_dir: /tmp/mdify-remote
+container_runtime: docker
+timeout: 30
+```
+
+Or use existing `~/.ssh/config`:
+```
+Host production
+  HostName 192.168.1.100
+  User deploy
+  Port 2222
+  IdentityFile ~/.ssh/deploy_key
+```
+
+Then simply: `mdify doc.pdf --remote-host production`
+
+**Configuration Precedence** (highest to lowest):
+1. CLI arguments (`--remote-*`)
+2. `~/.mdify/remote.conf`
+3. `~/.ssh/config`
+4. Built-in defaults
+
+See the [SSH Remote Server Guide](#ssh-remote-server-options) below for all options.
+
 ### ⚠️ PII Masking (Deprecated)
 
 The `--mask` flag is deprecated and will be ignored in this version. PII masking functionality was available in older versions using a custom runtime but is not supported with the current docling-serve backend.
@@ -126,6 +192,24 @@ The first conversion takes longer (~30-60s) as the container loads ML models int
 | `--pull POLICY` | Image pull policy: always, missing, never (default: missing) |
 | `--check-update` | Check for available updates and exit |
 | `--version` | Show version and exit |
+
+### SSH Remote Server Options
+
+| Option | Description |
+| ------ | ----------- |
+| `--remote-host HOST` | SSH hostname or IP (required for remote mode) |
+| `--remote-port PORT` | SSH port (default: 22) |
+| `--remote-user USER` | SSH username (uses ~/.ssh/config or current user) |
+| `--remote-key PATH` | SSH private key file path |
+| `--remote-key-passphrase PASS` | SSH key passphrase |
+| `--remote-timeout SEC` | SSH connection timeout in seconds (default: 30) |
+| `--remote-work-dir DIR` | Remote working directory (default: /tmp/mdify-remote) |
+| `--remote-runtime RT` | Remote container runtime: docker or podman (auto-detected) |
+| `--remote-config PATH` | Path to mdify remote config file (default: ~/.mdify/remote.conf) |
+| `--remote-skip-ssh-config` | Don't load settings from ~/.ssh/config |
+| `--remote-skip-validation` | Skip remote resource validation (not recommended) |
+| `--remote-validate-only` | Validate remote server and exit (dry run) |
+| `--remote-debug` | Enable detailed SSH debug logging |
 
 ### Container Runtime Selection
 
@@ -259,6 +343,110 @@ Or if installed via pip:
 
 ```bash
 pip uninstall mdify-cli
+```
+
+## Troubleshooting
+
+### SSH Remote Server Issues
+
+**Connection Refused**
+
+```
+Error: SSH connection failed: Connection refused (host:22)
+```
+
+- Verify SSH server is running on remote: `ssh user@host`
+- Check firewall allows port 22 (or custom SSH port)
+- Verify hostname/IP is correct
+
+**Authentication Failed**
+
+```
+Error: SSH authentication failed
+```
+
+- Use SSH key authentication (password auth not supported)
+- Verify key file exists: `ls -l ~/.ssh/id_rsa`
+- Check key permissions: `chmod 600 ~/.ssh/id_rsa`
+- Test SSH manually: `ssh -i ~/.ssh/id_rsa user@host`
+- Add key to ssh-agent: `ssh-add ~/.ssh/id_rsa`
+
+**Remote Container Runtime Not Found**
+
+```
+Error: Container runtime not available: docker/podman
+```
+
+- Install Docker on remote: `sudo apt install docker.io` (Ubuntu/Debian)
+- Or install Podman: `sudo dnf install podman` (Fedora/RHEL)
+- Add user to docker group: `sudo usermod -aG docker $USER`
+- Verify remote Docker running: `ssh user@host docker ps`
+
+**Insufficient Remote Resources**
+
+```
+Warning: Less than 5GB available on remote
+```
+
+- Free up disk space on remote server
+- Use `--remote-work-dir` to specify different partition
+- Use `--remote-skip-validation` to bypass check (not recommended)
+
+**File Transfer Timeout**
+
+```
+Error: File transfer timeout
+```
+
+- Increase timeout: `--remote-timeout 120`
+- Check network bandwidth and stability
+- Try smaller files first to verify connection
+
+**Container Health Check Fails**
+
+```
+Error: Container failed to become healthy within 60 seconds
+```
+
+- Check remote Docker logs: `ssh user@host docker logs mdify-remote-<id>`
+- Verify port 5001 not in use: `ssh user@host netstat -tuln | grep 5001`
+- Try different port: `--port 5002`
+
+**SSH Config Not Loaded**
+
+If using SSH config alias but getting connection errors:
+
+```bash
+# Verify SSH config is valid
+cat ~/.ssh/config
+
+# Test SSH config works
+ssh your-alias
+
+# Use explicit connection if needed
+mdify doc.pdf --remote-host 192.168.1.100 --remote-user admin
+```
+
+**Permission Denied on Remote**
+
+```
+Error: Work directory not writable: /tmp/mdify-remote
+```
+
+- SSH to remote and check permissions: `ssh user@host ls -ld /tmp`
+- Use directory in your home: `--remote-work-dir ~/mdify-temp`
+- Fix permissions: `ssh user@host chmod 777 /tmp/mdify-remote`
+
+**Debug Mode**
+
+Enable detailed logging for troubleshooting:
+
+```bash
+# Debug SSH operations
+mdify doc.pdf --remote-host server --remote-debug
+
+# Debug local operations
+MDIFY_DEBUG=1 mdify doc.pdf
 ```
 
 ## Development

@@ -1,0 +1,37 @@
+# Docker context exclusions
+.git/
+Dockerfile*
+.dockerignore
+
+# Dependency/cache directories
+__pycache__/
+*.py[codz]
+*.pyo
+*.pyd
+*.pyc
+.venv/
+venv/
+ENV/
+.env*
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+
+# Logs
+*.log*
