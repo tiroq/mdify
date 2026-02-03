@@ -122,8 +122,8 @@ class RemoteContainer(DoclingContainer):
         logger.info(f"Stopping remote container: {self.name}")
         
         try:
-            cmd = f"docker stop" if not force else f"docker kill"
-            cmd = f"{self.runtime} {cmd} {self.state.container_id}"
+            action = "stop" if not force else "kill"
+            cmd = f"{self.runtime} {action} {self.state.container_id}"
             
             stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=self.timeout)
             
@@ -169,11 +169,14 @@ class RemoteContainer(DoclingContainer):
             return False
         
         try:
-            # Use curl inside SSH session to check health endpoint
-            cmd = f"curl -f -s {self.state.base_url}/health"
+            # Use curl inside SSH session to check if service responds
+            # The docling-serve doesn't have a /health endpoint, so we check if it responds at all
+            cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{self.port}/"
             stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=5)
             
-            is_healthy = code == 0
+            # Any HTTP response (even 404) means the service is running
+            http_code = stdout.strip()
+            is_healthy = http_code in ["200", "404", "422"]  # 404 = Not Found is OK, 422 = Unprocessable Entity
             self.state.health_status = "healthy" if is_healthy else "unhealthy"
             return is_healthy
             
