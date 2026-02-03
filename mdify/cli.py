@@ -1375,6 +1375,9 @@ def main_async_remote(args) -> int:
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
+                                        if conversion_attempt >= 2:
+                                            if not args.quiet:
+                                                print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
                             
                             if not conversion_success:
