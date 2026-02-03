@@ -1248,7 +1248,8 @@ def main_async_remote(args) -> int:
                 if isinstance(exc, SSHConnectionError):
                     return True
                 msg = str(exc).lower()
-                return "broken pipe" in msg or "connection closed" in msg
+                # Errno 32 = Broken pipe, Errno 54 = Connection reset by peer
+                return any(x in msg for x in ["broken pipe", "connection closed", "connection reset", "errno 32", "errno 54", "ssh connection"])
             
             try:
                 for idx, input_file in enumerate(files_to_convert, 1):
