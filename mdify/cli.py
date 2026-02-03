@@ -1359,7 +1359,6 @@ def main_async_remote(args) -> int:
                                         if not args.quiet:
                                             # Exponential backoff: 5s, 10s
                                             backoff_delay = 5 * conversion_attempt
-                                            print(f"  [DEBUG] Connection error detected, incrementing attempt to {conversion_attempt}, backing off {backoff_delay}s", file=sys.stderr)
                                             print(f"  ↻ Connection reset during conversion. Reconnecting in {backoff_delay}s...", file=sys.stderr)
                                         
                                         await asyncio.sleep(backoff_delay)
@@ -1372,11 +1371,9 @@ def main_async_remote(args) -> int:
                                         # Reconnect with retry
                                         try:
                                             await ssh_client.connect()
+                                        except Exception:
                                             if not args.quiet:
-                                                print(f"  [DEBUG] Reconnected successfully", file=sys.stderr)
-                                        except Exception as reconn_exc:
-                                            if not args.quiet:
-                                                print(f"  ⚠ Reconnection failed: {reconn_exc}", file=sys.stderr)
+                                                print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
@@ -1387,15 +1384,10 @@ def main_async_remote(args) -> int:
                                                 print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
                             
-                            if not args.quiet:
-                                print(f"  [DEBUG] Exited conversion loop: success={conversion_success}, attempt={conversion_attempt}", file=sys.stderr)
                             if not conversion_success:
                                 print(f"  ✗ Failed: Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
                                 break
-                            
-                            if not args.quiet:
-                                print(f"  [DEBUG] Conversion successful, parsing response", file=sys.stderr)
                             
                             # Parse JSON response to extract markdown content
                             try:
