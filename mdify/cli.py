@@ -1287,19 +1287,10 @@ def main_async_remote(args) -> int:
                             
                             # Determine output path
                             output_dir = Path(args.out_dir)
+                            output_file = get_output_path(input_file, input_base, output_dir, args.flat)
                             
-                            # Preserve directory structure if not flat
-                            if not args.flat and input_base.is_dir():
-                                try:
-                                    rel_path = input_file.relative_to(input_base)
-                                    output_subdir = output_dir / rel_path.parent
-                                except ValueError:
-                                    output_subdir = output_dir
-                            else:
-                                output_subdir = output_dir
-                            
-                            output_subdir.mkdir(parents=True, exist_ok=True)
-                            output_file = output_subdir / f"{input_file.stem}.md"
+                            # Ensure output directory exists
+                            output_file.parent.mkdir(parents=True, exist_ok=True)
                             
                             # Check if output exists and skip if not overwrite
                             if output_file.exists() and not args.overwrite:
