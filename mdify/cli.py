@@ -1422,9 +1422,6 @@ def main_async_remote(args) -> int:
                                         # Ultimate fallback
                                         markdown_content = conversion_output
                                 
-                                if not args.quiet:
-                                    print(f"  [DEBUG] Response parsed, writing to remote", file=sys.stderr)
-                                
                                 # Write markdown content to local temp file first, then upload via SFTP
                                 # (Piping large content through SSH here-documents can crash the connection)
                                 content_size_kb = len(markdown_content) / 1024
