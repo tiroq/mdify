@@ -1395,8 +1395,8 @@ def main_async_remote(args) -> int:
                                     failed += 1
                                     break
                                 
-                            except (json.JSONDecodeError, KeyError, IndexError) as json_err:
-                                print(f"  ✗ Failed to parse conversion response: {json_err}", file=sys.stderr)
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                print(f"  ✗ Failed to parse conversion response", file=sys.stderr)
                                 if DEBUG:
                                     print(f"  Response: {conversion_output[:500]}", file=sys.stderr)
                                 failed += 1
