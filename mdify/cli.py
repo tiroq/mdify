@@ -1050,6 +1050,8 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
+        import json
+        
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
         
@@ -1271,18 +1273,77 @@ def main_async_remote(args) -> int:
                             continue
                         
                         # Convert using remote container's HTTP API
+                        # The docling-serve API expects:
+                        # - Endpoint: /v1/convert/file
+                        # - Method: POST with multipart/form-data
+                        # - File field: "files" (note the plural)
+                        # - Additional fields: to_formats=md, do_ocr=true
                         remote_output_path = f"{work_dir}/{input_file.stem}.md"
                         
-                        # Build conversion command on remote
-                        convert_cmd = f"curl -X POST -F 'file=@{remote_file_path}' "
+                        # Build conversion command on remote - use -F for multipart form data
+                        convert_cmd = (
+                            f"curl -X POST "
+                            f"-F 'files=@{remote_file_path}' "
+                            f"-F 'to_formats=md' "
+                            f"-F 'do_ocr=true' "
+                        )
                         if args.mask:
-                            convert_cmd += "-F 'mask=true' "
-                        convert_cmd += f"{remote_container.state.base_url}/convert -o {remote_output_path}"
+                            convert_cmd += f"-F 'mask=true' "
+                        convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
                         
                         stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
                         
                         if code != 0:
-                            print(f"  ✗ Conversion failed: {stderr}", file=sys.stderr)
+                            print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
+                            failed += 1
+                            continue
+                        
+                        # Parse JSON response to extract markdown content
+                        try:
+                            response_data = json.loads(stdout)
+                            
+                            # Extract content from response structure
+                            # Actual format: {"document": {"md_content": "..."}, "status": "success"}
+                            if "document" in response_data:
+                                document = response_data["document"]
+                                if "md_content" in document and document["md_content"]:
+                                    markdown_content = document["md_content"]
+                                elif "text_content" in document and document["text_content"]:
+                                    markdown_content = document["text_content"]
+                                else:
+                                    # Fallback - use whole document
+                                    markdown_content = json.dumps(document, indent=2)
+                            else:
+                                # Legacy format fallback
+                                if "results" in response_data and response_data["results"]:
+                                    result = response_data["results"][0]
+                                    if "content" in result:
+                                        content = result["content"]
+                                        if isinstance(content, dict) and "markdown" in content:
+                                            markdown_content = content["markdown"]
+                                        elif isinstance(content, str):
+                                            markdown_content = content
+                                        else:
+                                            markdown_content = str(content)
+                                    else:
+                                        markdown_content = str(result)
+                                else:
+                                    # Ultimate fallback
+                                    markdown_content = stdout
+                            
+                            # Write markdown content to remote file
+                            write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
+                            _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                            
+                            if write_code != 0:
+                                print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                                failed += 1
+                                continue
+                            
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                            if DEBUG:
+                                print(f"  Response: {stdout[:500]}", file=sys.stderr)
                             failed += 1
                             continue
                         
