@@ -1449,10 +1449,17 @@ def main_async_remote(args) -> int:
                                 # Write markdown content to remote file
                                 write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
                                 if not args.quiet:
+                                    content_size_kb = len(markdown_content) / 1024
+                                    print(f"  [DEBUG] Writing {content_size_kb:.1f}KB to remote", file=sys.stderr)
                                     print(f"  [DEBUG] Executing write command on remote", file=sys.stderr)
-                                _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
-                                if not args.quiet:
-                                    print(f"  [DEBUG] Write command completed with code={write_code}", file=sys.stderr)
+                                try:
+                                    _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                                    if not args.quiet:
+                                        print(f"  [DEBUG] Write command completed with code={write_code}", file=sys.stderr)
+                                except Exception as write_exc:
+                                    if not args.quiet:
+                                        print(f"  [DEBUG] Write command failed: {write_exc}", file=sys.stderr)
+                                    raise
                                 
                                 if write_code != 0:
                                     print(f"  ✗ Failed to write markdown output", file=sys.stderr)
