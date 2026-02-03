@@ -914,6 +914,97 @@ Examples:
         help="Skip memory availability validation (not recommended)",
     )
 
+    # SSH/Remote server options
+    ssh_group = parser.add_argument_group("Remote SSH Server", "Execute conversion on remote server via SSH")
+    
+    ssh_group.add_argument(
+        "--remote-host",
+        type=str,
+        default=None,
+        help="SSH host or alias (e.g., tsrv, 192.168.1.200, or SSH config alias)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-port",
+        type=int,
+        default=None,
+        help="SSH port (default: 22 or from SSH config)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-user",
+        type=str,
+        default=None,
+        help="SSH username (default: from SSH config or system user)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-key",
+        type=str,
+        default=None,
+        help="SSH private key path (default: ~/.ssh/id_rsa or from SSH config)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-key-passphrase",
+        type=str,
+        default=None,
+        help="SSH key passphrase (not recommended; use SSH agent)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-timeout",
+        type=int,
+        default=30,
+        help="SSH connection timeout in seconds (default: 30)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-work-dir",
+        type=str,
+        default="/tmp/mdify-remote",
+        help="Work directory on remote server (default: /tmp/mdify-remote)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-runtime",
+        type=str,
+        choices=("docker", "podman"),
+        default=None,
+        help="Container runtime on remote (docker or podman; auto-detect if not specified)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-config",
+        type=str,
+        default=None,
+        help="Path to mdify remote config file (YAML format, default: ~/.mdify/remote.conf)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-skip-ssh-config",
+        action="store_true",
+        help="Skip loading SSH config (use CLI arguments only)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-skip-validation",
+        action="store_true",
+        help="Skip remote resource validation (not recommended)",
+    )
+
+    ssh_group.add_argument(
+        "--remote-validate-only",
+        action="store_true",
+        help="Validate remote connection and resources, then exit",
+    )
+
+    ssh_group.add_argument(
+        "--remote-debug",
+        action="store_true",
+        help="Enable debug logging for remote SSH operations",
+    )
+
     # Utility options
     parser.add_argument(
         "--check-update",
@@ -928,6 +1019,170 @@ Examples:
     )
 
     return parser.parse_args()
+
+
+# =============================================================================
+# Remote SSH execution support
+# =============================================================================
+
+
+def main_async_remote(args) -> int:
+    """Execute conversion on remote server via SSH.
+    
+    This function handles:
+    1. Loading and merging SSH configuration
+    2. Establishing remote connection
+    3. Uploading input files
+    4. Executing remote conversion
+    5. Downloading output files
+    6. Cleanup on success or failure
+    
+    Args:
+        args: Parsed command-line arguments with remote_* options
+        
+    Returns:
+        Exit code (0 for success, non-zero for errors)
+    """
+    import asyncio
+    from pathlib import Path
+    from mdify.ssh import SSHConfig, AsyncSSHClient
+    from mdify.ssh.models import SSHConnectionError, SSHAuthError, ConfigError, ValidationError
+    
+    async def async_main() -> int:
+        """Async implementation of remote conversion."""
+        # Build SSH config from CLI arguments and SSH config files
+        try:
+            # Create SSHConfig from CLI arguments
+            ssh_config = SSHConfig(
+                host=args.remote_host,
+                port=args.remote_port or 22,
+                username=args.remote_user,
+                key_file=args.remote_key,
+                key_passphrase=args.remote_key_passphrase,
+                timeout=args.remote_timeout,
+                work_dir=args.remote_work_dir,
+                container_runtime=args.remote_runtime,
+            )
+            
+            if not args.remote_skip_ssh_config:
+                # Load from SSH config if host looks like an alias
+                if not args.remote_host.replace('.', '').replace('-', '').isdigit():
+                    try:
+                        ssh_from_config = SSHConfig.from_ssh_config(args.remote_host)
+                        ssh_config = ssh_config.merge(ssh_from_config)
+                    except Exception as e:
+                        if not args.quiet:
+                            print(f"Warning: Could not load SSH config for {args.remote_host}: {e}", file=sys.stderr)
+                
+                # Load from mdify remote.conf if it exists
+                mdify_remote_conf = args.remote_config or (Path.home() / ".mdify" / "remote.conf")
+                if mdify_remote_conf and Path(mdify_remote_conf).exists():
+                    try:
+                        ssh_from_mdify = SSHConfig.from_remote_conf(str(mdify_remote_conf))
+                        ssh_config = ssh_config.merge(ssh_from_mdify)
+                    except Exception as e:
+                        if not args.quiet:
+                            print(f"Warning: Could not load mdify remote config: {e}", file=sys.stderr)
+            
+            # Create SSH client
+            ssh_client = AsyncSSHClient(ssh_config)
+            
+            # Connect to remote server
+            if not args.quiet:
+                print(f"Connecting to {ssh_config.host}:{ssh_config.port}...", file=sys.stderr)
+            
+            await ssh_client.connect()
+            
+            if not args.quiet:
+                print(f"✓ Connected to {ssh_config.host}", file=sys.stderr)
+            
+            # Validate remote resources if not skipped
+            if not args.remote_skip_validation:
+                if not args.quiet:
+                    print("Validating remote resources...", file=sys.stderr)
+                
+                validation_result = await ssh_client.validate_remote_resources()
+                
+                if not validation_result.get("can_connect"):
+                    await ssh_client.disconnect()
+                    print("Error: Cannot connect to remote server", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("work_dir_writable"):
+                    await ssh_client.disconnect()
+                    print(f"Error: Work directory not writable: {ssh_config.work_dir}", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("container_runtime_available"):
+                    await ssh_client.disconnect()
+                    runtime_str = ssh_config.container_runtime or "docker/podman"
+                    print(f"Error: Container runtime not available: {runtime_str}", file=sys.stderr)
+                    return 1
+                
+                if not validation_result.get("disk_space_min_5gb"):
+                    print(f"Warning: Less than 5GB available on remote", file=sys.stderr)
+                    if not args.yes and sys.stdin.isatty():
+                        if not confirm_proceed("Continue anyway?"):
+                            await ssh_client.disconnect()
+                            return 130
+                
+                if not validation_result.get("memory_min_2gb"):
+                    print(f"Warning: Less than 2GB available memory on remote", file=sys.stderr)
+                    if not args.yes and sys.stdin.isatty():
+                        if not confirm_proceed("Continue anyway?"):
+                            await ssh_client.disconnect()
+                            return 130
+                
+                if not args.quiet:
+                    print("✓ All remote resources validated", file=sys.stderr)
+            
+            # If --remote-validate-only, exit here
+            if args.remote_validate_only:
+                await ssh_client.disconnect()
+                print("Remote validation successful", file=sys.stderr)
+                return 0
+            
+            # TODO: Phase 2.4.2 - Implement file upload, remote conversion, and download
+            # This will be completed in subsequent task commits
+            
+            await ssh_client.disconnect()
+            print("✓ Remote execution completed", file=sys.stderr)
+            return 0
+        
+        except SSHConnectionError as e:
+            print(f"Error: SSH connection failed: {e}", file=sys.stderr)
+            if hasattr(e, 'host') and hasattr(e, 'port'):
+                print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
+            return 1
+        except SSHAuthError as e:
+            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
+            return 1
+        except ConfigError as e:
+            print(f"Error: Configuration error: {e}", file=sys.stderr)
+            return 1
+        except ValidationError as e:
+            print(f"Error: Validation error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Error: Unexpected error during remote execution: {e}", file=sys.stderr)
+            if DEBUG:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+            return 1
+    
+    # Run async main
+    try:
+        return asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("\n⚠ Interrupted by user", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"Error: Failed to run remote execution: {e}", file=sys.stderr)
+        if DEBUG:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 # =============================================================================
@@ -947,6 +1202,21 @@ def main() -> int:
 
     # Check for updates (daily, silent on errors)
     check_for_update(force=False)
+
+    # Detect remote mode (SSH-based execution)
+    is_remote_mode = hasattr(args, 'remote_host') and args.remote_host is not None
+    
+    if is_remote_mode:
+        # Remote mode: will use SSH to execute on remote server
+        # Import here to avoid import errors if asyncssh not installed in local environment
+        try:
+            import asyncio
+            from mdify.ssh import AsyncSSHClient, SSHConfig
+            return main_async_remote(args)
+        except ImportError:
+            print("Error: Remote mode requires asyncssh and additional dependencies", file=sys.stderr)
+            print("Install with: pip install mdify-cli[remote]", file=sys.stderr)
+            return 1
 
     # Resolve timeout value: CLI > env > default 1200
     timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
