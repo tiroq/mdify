@@ -1407,6 +1407,9 @@ def main_async_remote(args) -> int:
                                 failed += 1
                                 break
                             
+                            if not args.quiet:
+                                print(f"  [DEBUG] Conversion successful, parsing response", file=sys.stderr)
+                            
                             # Parse JSON response to extract markdown content
                             try:
                                 response_data = json.loads(conversion_output)
@@ -1440,9 +1443,16 @@ def main_async_remote(args) -> int:
                                         # Ultimate fallback
                                         markdown_content = conversion_output
                                 
+                                if not args.quiet:
+                                    print(f"  [DEBUG] Response parsed, writing to remote", file=sys.stderr)
+                                
                                 # Write markdown content to remote file
                                 write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
+                                if not args.quiet:
+                                    print(f"  [DEBUG] Executing write command on remote", file=sys.stderr)
                                 _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                                if not args.quiet:
+                                    print(f"  [DEBUG] Write command completed with code={write_code}", file=sys.stderr)
                                 
                                 if write_code != 0:
                                     print(f"  ✗ Failed to write markdown output", file=sys.stderr)
