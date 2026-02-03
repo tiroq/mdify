@@ -1050,31 +1050,22 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
-        import json
         
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
         
         # Build SSH config from CLI arguments and SSH config files
         try:
-            # Create SSHConfig from CLI arguments
-            ssh_config = SSHConfig(
-                host=args.remote_host,
-                port=args.remote_port or 22,
-                username=args.remote_user,
-                key_file=args.remote_key,
-                key_passphrase=args.remote_key_passphrase,
-                timeout=args.remote_timeout,
-                work_dir=args.remote_work_dir,
-                container_runtime=args.remote_runtime,
-            )
+            # Start with defaults, then layer configs with increasing precedence
+            # Precedence order (lowest to highest): SSH config -> mdify remote.conf -> CLI args
+            ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
             
             if not args.remote_skip_ssh_config:
                 # Load from SSH config if host looks like an alias
                 if not args.remote_host.replace('.', '').replace('-', '').isdigit():
                     try:
                         ssh_from_config = SSHConfig.from_ssh_config(args.remote_host)
-                        ssh_config = ssh_config.merge(ssh_from_config)
+                        ssh_config = ssh_from_config
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load SSH config for {args.remote_host}: {e}", file=sys.stderr)
@@ -1088,6 +1079,19 @@ def main_async_remote(args) -> int:
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load mdify remote config: {e}", file=sys.stderr)
+            
+            # Apply CLI arguments with highest precedence
+            cli_config = SSHConfig(
+                host=args.remote_host,
+                port=args.remote_port or None,
+                username=args.remote_user,
+                key_file=args.remote_key,
+                key_passphrase=args.remote_key_passphrase,
+                timeout=args.remote_timeout,
+                work_dir=args.remote_work_dir,
+                container_runtime=args.remote_runtime,
+            )
+            ssh_config = ssh_config.merge(cli_config)
             
             # Create SSH client
             ssh_client = AsyncSSHClient(ssh_config)
@@ -1411,14 +1415,14 @@ def main_async_remote(args) -> int:
             
             return 0 if failed == 0 else 1
         
+        except SSHAuthError as e:
+            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
+            return 1
         except SSHConnectionError as e:
             print(f"Error: SSH connection failed: {e}", file=sys.stderr)
             if hasattr(e, 'host') and hasattr(e, 'port'):
                 print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
-            return 1
-        except SSHAuthError as e:
-            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
-            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
             return 1
         except ConfigError as e:
             print(f"Error: Configuration error: {e}", file=sys.stderr)

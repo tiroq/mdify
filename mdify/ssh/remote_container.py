@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import Literal
 from mdify.container import DoclingContainer
-from mdify.ssh.models import RemoteContainerState, SSHConnectionError
+from mdify.ssh.models import RemoteContainerState
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,14 @@ class RemoteContainer(DoclingContainer):
             timeout: Timeout for operations in seconds
             health_check_interval: Health check poll interval in seconds
         """
+        # Initialize base class
+        super().__init__(
+            runtime=runtime,
+            image=image,
+            port=port,
+            timeout=timeout
+        )
+        
         self.ssh_client = ssh_client
         self.image = image
         self.port = port
@@ -125,14 +133,19 @@ class RemoteContainer(DoclingContainer):
             action = "stop" if not force else "kill"
             cmd = f"{self.runtime} {action} {self.state.container_id}"
             
-            stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=self.timeout)
+            _stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=self.timeout)
             
             if code != 0:
                 logger.warning(f"Container stop returned code {code}: {stderr}")
             
             # Remove container
             cmd = f"{self.runtime} rm {self.state.container_id}"
-            stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=self.timeout)
+            _stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=self.timeout)
+            
+            if code != 0:
+                logger.warning(f"Container remove returned code {code}: {stderr}")
+            else:
+                logger.debug(f"Container removed: {self.state.container_id}")
             
             self.state.is_running = False
             logger.info(f"Container stopped: {self.state.container_id}")

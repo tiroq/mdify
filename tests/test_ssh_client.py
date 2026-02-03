@@ -1,8 +1,8 @@
 """Tests for SSH client implementation."""
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
-from mdify.ssh.models import SSHConfig, SSHConnectionError, SSHAuthError, ConfigError
+from unittest.mock import Mock, patch
+from mdify.ssh.models import SSHConfig, SSHConnectionError, ConfigError
 from mdify.ssh.client import AsyncSSHClient
 
 

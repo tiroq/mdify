@@ -1,6 +1,5 @@
 """File transfer and progress tracking for SSH."""
 
-import asyncio
 import gzip
 import hashlib
 import logging
@@ -85,16 +84,14 @@ class FileTransferManager:
                 if code == 0:
                     raise FileExistsError(f"Remote file exists: {remote_path}")
             
-            # Prepare source data
+            # Prepare target path (content is streamed directly from local_file)
             if compress:
                 logger.debug(f"Compressing {local_file.name} for upload...")
                 session.status = "in_progress"
-                data = await self._compress_file(local_file)
+                await self._compress_file(local_file)
                 actual_remote_path = f"{remote_path}.gz"
                 session.status = "in_progress"
             else:
-                with open(local_file, 'rb') as f:
-                    data = f.read()
                 actual_remote_path = remote_path
             
             # Upload via SFTP
