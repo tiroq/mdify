@@ -91,10 +91,11 @@ class RemoteContainer(DoclingContainer):
         """Start container on remote server.
         
         Operations:
-        1. Detect container runtime on remote
-        2. Run docker/podman run command
-        3. Extract container ID
-        4. Wait for health check
+        1. Clean up any existing containers using this port
+        2. Detect container runtime on remote
+        3. Run docker/podman run command
+        4. Extract container ID
+        5. Wait for health check
         
         Raises:
             RuntimeError: Container already running or start failed
@@ -104,6 +105,9 @@ class RemoteContainer(DoclingContainer):
             raise RuntimeError(f"Container {self.name} is already running")
         
         logger.info(f"Starting remote container: {self.name}")
+        
+        # Clean up any existing containers on this port
+        await self._cleanup_port()
         
         try:
             # Detect runtime if needed
