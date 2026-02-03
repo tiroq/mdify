@@ -1107,17 +1107,17 @@ def main_async_remote(args) -> int:
             
             # Connect to remote server
             if not args.quiet:
-                print(f"Connecting to {ssh_config.host}:{ssh_config.port}...", file=sys.stderr)
+                print(color.cyan(f"Connecting to {ssh_config.host}:{ssh_config.port}..."), file=sys.stderr)
             
             await ssh_client.connect()
             
             if not args.quiet:
-                print(f"✓ Connected to {ssh_config.host}", file=sys.stderr)
+                print(color.green(f"✓ Connected to {ssh_config.host}"), file=sys.stderr)
             
             # Validate remote resources if not skipped
             if not args.remote_skip_validation:
                 if not args.quiet:
-                    print("Validating remote resources...", file=sys.stderr)
+                    print(color.cyan("Validating remote resources..."), file=sys.stderr)
                 
                 validation_result = await ssh_client.validate_remote_resources()
                 
@@ -1152,7 +1152,7 @@ def main_async_remote(args) -> int:
                             return 130
                 
                 if not args.quiet:
-                    print("✓ All remote resources validated", file=sys.stderr)
+                    print(color.green("✓ All remote resources validated"), file=sys.stderr)
             
             # If --remote-validate-only, exit here
             if args.remote_validate_only:
@@ -1178,7 +1178,7 @@ def main_async_remote(args) -> int:
                 return 1
             
             if not args.quiet:
-                print(f"\nFound {len(files_to_convert)} file(s) to convert", file=sys.stderr)
+                print(color.cyan(f"\nFound {len(files_to_convert)} file(s) to convert"), file=sys.stderr)
             
             # Import remote container and transfer manager
             from mdify.ssh.transfer import FileTransferManager
@@ -1223,12 +1223,12 @@ def main_async_remote(args) -> int:
             
             # Start remote container
             if not args.quiet:
-                print(f"\nStarting remote container ({image})...", file=sys.stderr)
+                print(color.cyan(f"\nStarting remote container ({image})..."), file=sys.stderr)
             
             try:
                 await remote_container.start()
                 if not args.quiet:
-                    print(f"✓ Container started: {remote_container.state.container_name}", file=sys.stderr)
+                    print(color.green(f"✓ Container started: {remote_container.state.container_name}"), file=sys.stderr)
             except Exception as e:
                 await ssh_client.disconnect()
                 print(f"Error: Failed to start remote container: {e}", file=sys.stderr)
@@ -1380,7 +1380,7 @@ def main_async_remote(args) -> int:
                             
                             # Download result
                             if not args.quiet:
-                                print(f"  Downloading result to {output_file}...", file=sys.stderr)
+                                print(color.cyan(f"  Downloading result to {output_file}..."), file=sys.stderr)
                             
                             await transfer_manager.download_file(
                                 remote_path=remote_output_path,
@@ -1389,7 +1389,7 @@ def main_async_remote(args) -> int:
                             )
                             
                             if not args.quiet:
-                                print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
+                                print(color.green(f"  ✓ Download complete: {output_file}"), file=sys.stderr)
                             
                             successful += 1
                             
@@ -1401,7 +1401,7 @@ def main_async_remote(args) -> int:
                             if is_connection_error(e) and attempt == 0:
                                 attempt += 1
                                 if not args.quiet:
-                                    print("  ↻ Connection lost. Reconnecting...", file=sys.stderr)
+                                    print(color.yellow("  ↻ Connection lost. Reconnecting..."), file=sys.stderr)
                                 try:
                                     await ssh_client.disconnect()
                                 except Exception:
@@ -1419,21 +1419,21 @@ def main_async_remote(args) -> int:
             finally:
                 # Stop and remove container
                 if not args.quiet:
-                    print(f"\nStopping remote container...", file=sys.stderr)
+                    print(color.cyan(f"\nStopping remote container..."), file=sys.stderr)
                 
                 try:
                     await remote_container.stop(force=False)
                     if not args.quiet:
-                        print(f"✓ Container stopped", file=sys.stderr)
+                        print(color.green(f"✓ Container stopped"), file=sys.stderr)
                 except Exception as e:
                     if not args.quiet:
-                        print(f"Warning: Failed to stop container: {e}", file=sys.stderr)
+                        print(color.yellow(f"Warning: Failed to stop container: {e}"), file=sys.stderr)
                 
                 # Cleanup remote work directory
                 try:
                     await ssh_client.run_command(f"rm -rf {work_dir}")
                     if not args.quiet:
-                        print(f"✓ Cleaned up remote directory", file=sys.stderr)
+                        print(color.green(f"✓ Cleaned up remote directory"), file=sys.stderr)
                 except Exception as e:
                     if not args.quiet:
                         print(f"Warning: Failed to cleanup remote directory: {e}", file=sys.stderr)
@@ -1442,21 +1442,24 @@ def main_async_remote(args) -> int:
                 await ssh_client.disconnect()
             
             # Print summary
-            print(f"\n{'='*60}", file=sys.stderr)
-            print(f"Remote conversion complete:", file=sys.stderr)
-            print(f"  Successful: {successful}", file=sys.stderr)
-            print(f"  Failed:     {failed}", file=sys.stderr)
+            print(color.cyan(f"\n{'='*60}"), file=sys.stderr)
+            print(color.cyan(f"Remote conversion complete:"), file=sys.stderr)
+            print(color.green(f"  Successful: {successful}"), file=sys.stderr)
+            if failed > 0:
+                print(color.yellow(f"  Failed:     {failed}"), file=sys.stderr)
+            else:
+                print(f"  Failed:     {failed}", file=sys.stderr)
             print(f"  Total:      {len(files_to_convert)}", file=sys.stderr)
-            print(f"{'='*60}", file=sys.stderr)
+            print(color.cyan(f"{'='*60}"), file=sys.stderr)
             
             return 0 if failed == 0 else 1
         
         except SSHAuthError as e:
-            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print(color.yellow(f"Error: SSH authentication failed: {e}"), file=sys.stderr)
             print("  Check your SSH key, passphrase, or username", file=sys.stderr)
             return 1
         except SSHConnectionError as e:
-            print(f"Error: SSH connection failed: {e}", file=sys.stderr)
+            print(color.yellow(f"Error: SSH connection failed: {e}"), file=sys.stderr)
             if hasattr(e, 'host') and hasattr(e, 'port'):
                 print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
             return 1
