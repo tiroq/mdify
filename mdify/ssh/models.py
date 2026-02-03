@@ -212,7 +212,6 @@ class SSHConfig:
                         if len(parts) == 2:
                             hosts = parts[1].split()
                             in_target_block = target_host in hosts or '*' in hosts
-                            current_hosts = hosts
                             if not in_target_block:
                                 config_data = {}
                         continue
@@ -400,7 +399,7 @@ class TransferSession:
             return
         
         self.transferred_bytes = transferred_bytes
-        self.avg_speed_mbps = (transferred_bytes / elapsed) / (1024 * 1024) if elapsed > 0 else 0
+        self.avg_speed_mbps = (transferred_bytes / elapsed) / (1024 * 1024)
         
         if self.avg_speed_mbps > 0 and self.transferred_bytes < self.total_bytes:
             remaining_bytes = self.total_bytes - self.transferred_bytes

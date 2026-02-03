@@ -2,11 +2,11 @@
 
 import asyncio
 import logging
-from typing import Callable, AsyncGenerator
+from typing import AsyncGenerator
 from pathlib import Path
 import asyncssh
 
-from mdify.ssh.models import SSHConfig, SSHConnectionError, SSHAuthError, ValidationError
+from mdify.ssh.models import SSHConfig, SSHConnectionError, SSHAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ class AsyncSSHClient:
                 return
                 
             except asyncssh.PermissionDenied as e:
-                last_error = e
                 logger.debug(f"SSH: Authentication failed: {e}")
                 raise SSHAuthError(
                     f"SSH authentication failed: {e}",
@@ -99,7 +98,6 @@ class AsyncSSHClient:
                     await asyncio.sleep(delay)
                     
             except Exception as e:
-                last_error = e
                 logger.debug(f"SSH: Connection failed: {e}")
                 raise SSHConnectionError(
                     f"SSH connection failed: {e}",

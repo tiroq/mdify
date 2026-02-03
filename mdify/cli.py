@@ -1050,31 +1050,21 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
-        import json
         
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
         
         # Build SSH config from CLI arguments and SSH config files
         try:
-            # Create SSHConfig from CLI arguments
-            ssh_config = SSHConfig(
-                host=args.remote_host,
-                port=args.remote_port or 22,
-                username=args.remote_user,
-                key_file=args.remote_key,
-                key_passphrase=args.remote_key_passphrase,
-                timeout=args.remote_timeout,
-                work_dir=args.remote_work_dir,
-                container_runtime=args.remote_runtime,
-            )
+            # Build config with proper precedence (lowest to highest):
+            # SSH config -> mdify remote.conf -> CLI args
+            ssh_config = None
             
             if not args.remote_skip_ssh_config:
                 # Load from SSH config if host looks like an alias
                 if not args.remote_host.replace('.', '').replace('-', '').isdigit():
                     try:
-                        ssh_from_config = SSHConfig.from_ssh_config(args.remote_host)
-                        ssh_config = ssh_config.merge(ssh_from_config)
+                        ssh_config = SSHConfig.from_ssh_config(args.remote_host)
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load SSH config for {args.remote_host}: {e}", file=sys.stderr)
@@ -1084,10 +1074,30 @@ def main_async_remote(args) -> int:
                 if mdify_remote_conf and Path(mdify_remote_conf).exists():
                     try:
                         ssh_from_mdify = SSHConfig.from_remote_conf(str(mdify_remote_conf))
-                        ssh_config = ssh_config.merge(ssh_from_mdify)
+                        if ssh_config:
+                            ssh_config = ssh_config.merge(ssh_from_mdify)
+                        else:
+                            ssh_config = ssh_from_mdify
                     except Exception as e:
                         if not args.quiet:
                             print(f"Warning: Could not load mdify remote config: {e}", file=sys.stderr)
+            
+            # Start with minimal defaults if no config loaded
+            if ssh_config is None:
+                ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
+            
+            # Apply CLI arguments with highest precedence
+            cli_config = SSHConfig(
+                host=args.remote_host,
+                port=args.remote_port,
+                username=args.remote_user,
+                key_file=args.remote_key,
+                key_passphrase=args.remote_key_passphrase,
+                timeout=args.remote_timeout,
+                work_dir=args.remote_work_dir,
+                container_runtime=args.remote_runtime,
+            )
+            ssh_config = ssh_config.merge(cli_config)
             
             # Create SSH client
             ssh_client = AsyncSSHClient(ssh_config)
@@ -1411,14 +1421,14 @@ def main_async_remote(args) -> int:
             
             return 0 if failed == 0 else 1
         
+        except SSHAuthError as e:
+            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
+            return 1
         except SSHConnectionError as e:
             print(f"Error: SSH connection failed: {e}", file=sys.stderr)
             if hasattr(e, 'host') and hasattr(e, 'port'):
                 print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
-            return 1
-        except SSHAuthError as e:
-            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
-            print("  Check your SSH key, passphrase, or username", file=sys.stderr)
             return 1
         except ConfigError as e:
             print(f"Error: Configuration error: {e}", file=sys.stderr)
