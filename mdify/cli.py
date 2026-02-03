@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1446,23 +1447,38 @@ def main_async_remote(args) -> int:
                                 if not args.quiet:
                                     print(f"  [DEBUG] Response parsed, writing to remote", file=sys.stderr)
                                 
-                                # Write markdown content to remote file
-                                write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
+                                # Write markdown content to local temp file first, then upload via SFTP
+                                # (Piping large content through SSH here-documents can crash the connection)
+                                
+                                content_size_kb = len(markdown_content) / 1024
                                 if not args.quiet:
-                                    content_size_kb = len(markdown_content) / 1024
-                                    print(f"  [DEBUG] Writing {content_size_kb:.1f}KB to remote", file=sys.stderr)
-                                    print(f"  [DEBUG] Executing write command on remote", file=sys.stderr)
+                                    print(f"  {color.cyan('Writing')} {content_size_kb:.1f}KB markdown via SFTP...", file=sys.stderr)
+                                
                                 try:
-                                    _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                                    # Write to temporary local file
+                                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as temp_file:
+                                        temp_file.write(markdown_content)
+                                        temp_path = temp_file.name
+                                    
+                                    # Upload via SFTP (more reliable for large files)
+                                    await transfer_manager.upload_file(
+                                        local_path=temp_path,
+                                        remote_path=remote_output_path,
+                                        overwrite=True,
+                                        compress=False,
+                                    )
+                                    
+                                    # Cleanup temp file
+                                    try:
+                                        os.unlink(temp_path)
+                                    except Exception:
+                                        pass
+                                    
                                     if not args.quiet:
-                                        print(f"  [DEBUG] Write command completed with code={write_code}", file=sys.stderr)
+                                        print(f"  {color.green('✓')} Markdown written", file=sys.stderr)
                                 except Exception as write_exc:
                                     if not args.quiet:
-                                        print(f"  [DEBUG] Write command failed: {write_exc}", file=sys.stderr)
-                                    raise
-                                
-                                if write_code != 0:
-                                    print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                                        print(f"  ✗ Failed to write markdown: {write_exc}", file=sys.stderr)
                                     failed += 1
                                     break
                                 
