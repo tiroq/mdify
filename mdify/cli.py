@@ -883,7 +883,7 @@ Examples:
         "--timeout",
         type=int,
         default=None,
-        help="Conversion timeout in seconds (default: 1200, can be set via MDIFY_TIMEOUT env var)",
+        help="Conversion timeout in seconds (default: 1200s for local, 3600s for remote with large PDFs, can be set via MDIFY_TIMEOUT env var)",
     )
 
     parser.add_argument(
@@ -1057,6 +1057,10 @@ def main_async_remote(args) -> int:
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
         
+        # For remote operations, extend timeout significantly for large PDF processing
+        # Remote conversions include network latency, file upload/download, and OCR processing
+        remote_conversion_timeout = max(timeout, 3600)  # At least 1 hour for remote conversion
+        
         # Build SSH config from CLI arguments and SSH config files
         try:
             # Build config with proper precedence (lowest to highest):
@@ -1178,7 +1182,8 @@ def main_async_remote(args) -> int:
                 return 1
             
             if not args.quiet:
-                print(color.cyan(f"\nFound {len(files_to_convert)} file(s) to convert"), file=sys.stderr)
+                print(color.cyan(f"Found {len(files_to_convert)} file(s) to convert"), file=sys.stderr)
+                print(color.cyan(f"Conversion timeout: {remote_conversion_timeout}s (for large PDFs with OCR)"), file=sys.stderr)
             
             # Import remote container and transfer manager
             from mdify.ssh.transfer import FileTransferManager
@@ -1309,8 +1314,13 @@ def main_async_remote(args) -> int:
                             remote_output_path = f"{work_dir}/{input_file.stem}.md"
                             
                             # Build conversion command on remote - use -F for multipart form data
+                            # Important: use generous timeouts since large PDFs with OCR take time
+                            # --connect-timeout: max time to establish connection (60s)
+                            # --max-time: max total operation time (extended timeout)
                             convert_cmd = (
                                 f"curl -X POST "
+                                f"--connect-timeout 60 "
+                                f"--max-time {remote_conversion_timeout} "
                                 f"-F 'files=@{remote_file_path}' "
                                 f"-F 'to_formats=md' "
                                 f"-F 'do_ocr=true' "
@@ -1328,7 +1338,7 @@ def main_async_remote(args) -> int:
                                     if conversion_attempt > 0 and not args.quiet:
                                         print(f"  ↻ Conversion retry {conversion_attempt}...", file=sys.stderr)
                                     
-                                    conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                                    conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
                                     
                                     if conv_code == 0:
                                         conversion_success = True
