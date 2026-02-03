@@ -8,6 +8,7 @@ is lightweight and has no ML dependencies.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import platform
@@ -1336,7 +1337,10 @@ def main_async_remote(args) -> int:
                             while conversion_attempt < 3 and not conversion_success:
                                 try:
                                     if conversion_attempt > 0 and not args.quiet:
-                                        print(f"  ↻ Conversion retry {conversion_attempt}...", file=sys.stderr)
+                                        # Exponential backoff: 2s, 4s, 8s
+                                        backoff_delay = 2 ** conversion_attempt
+                                        print(f"  ↻ Conversion retry {conversion_attempt} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
+                                        await asyncio.sleep(backoff_delay)
                                     
                                     conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
                                     
@@ -1349,12 +1353,24 @@ def main_async_remote(args) -> int:
                                     if is_connection_error(conv_exc) and conversion_attempt < 2:
                                         conversion_attempt += 1
                                         if not args.quiet:
-                                            print(f"  ↻ Connection lost during conversion. Reconnecting (attempt {conversion_attempt})...", file=sys.stderr)
+                                            # Exponential backoff: 5s, 10s
+                                            backoff_delay = 5 * conversion_attempt
+                                            print(f"  ↻ Connection reset during conversion. Reconnecting in {backoff_delay}s...", file=sys.stderr)
+                                        
+                                        await asyncio.sleep(backoff_delay)
+                                        
                                         try:
                                             await ssh_client.disconnect()
                                         except Exception:
                                             pass
-                                        await ssh_client.connect()
+                                        
+                                        # Reconnect with retry
+                                        try:
+                                            await ssh_client.connect()
+                                        except Exception:
+                                            if not args.quiet:
+                                                print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
+                                            continue
                                     else:
                                         conversion_attempt += 1
                             
