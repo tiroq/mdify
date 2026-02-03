@@ -1352,7 +1352,8 @@ def main_async_remote(args) -> int:
                                         # Non-zero exit code - fail without retry for non-connection errors
                                         break
                                 except Exception as conv_exc:
-                                    if is_connection_error(conv_exc) and conversion_attempt < 2:
+                                    is_conn_err = is_connection_error(conv_exc)
+                                    if is_conn_err and conversion_attempt < 2:
                                         conversion_attempt += 1
                                         if not args.quiet:
                                             # Exponential backoff: 5s, 10s
@@ -1375,7 +1376,7 @@ def main_async_remote(args) -> int:
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
-                                        if conversion_attempt >= 2:
+                                        if conversion_attempt >= 2 and is_conn_err:
                                             if not args.quiet:
                                                 print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
