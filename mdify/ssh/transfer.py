@@ -98,7 +98,7 @@ class FileTransferManager:
                 actual_remote_path = remote_path
             
             # Upload via SFTP
-            async with self.ssh_client.connection.get_sftp_client() as sftp:
+            async with self.ssh_client.connection.start_sftp_client() as sftp:
                 # Write file with progress tracking
                 bytes_written = 0
                 with open(local_file, 'rb') as local_fp:
@@ -173,7 +173,7 @@ class FileTransferManager:
                     session.total_bytes = 0
             
             # Download via SFTP
-            async with self.ssh_client.connection.get_sftp_client() as sftp:
+            async with self.ssh_client.connection.start_sftp_client() as sftp:
                 bytes_read = 0
                 with open(local_file, 'wb') as local_fp:
                     async with await sftp.open(remote_path, 'rb') as remote_fp:
