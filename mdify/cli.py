@@ -1257,6 +1257,7 @@ def main_async_remote(args) -> int:
                             local_path=str(input_file),
                             remote_path=remote_file_path,
                             overwrite=True,
+                            compress=False,
                         )
                         
                         if not args.quiet:
