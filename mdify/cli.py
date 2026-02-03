@@ -1319,16 +1319,43 @@ def main_async_remote(args) -> int:
                                 convert_cmd += f"-F 'mask=true' "
                             convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
                             
-                            stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                            # Retry conversion command with exponential backoff
+                            conversion_attempt = 0
+                            conversion_success = False
+                            conversion_output = None
+                            while conversion_attempt < 3 and not conversion_success:
+                                try:
+                                    if conversion_attempt > 0 and not args.quiet:
+                                        print(f"  ↻ Conversion retry {conversion_attempt}...", file=sys.stderr)
+                                    
+                                    conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                                    
+                                    if conv_code == 0:
+                                        conversion_success = True
+                                        break
+                                    else:
+                                        conversion_attempt += 1
+                                except Exception as conv_exc:
+                                    if is_connection_error(conv_exc) and conversion_attempt < 2:
+                                        conversion_attempt += 1
+                                        if not args.quiet:
+                                            print(f"  ↻ Connection lost during conversion. Reconnecting (attempt {conversion_attempt})...", file=sys.stderr)
+                                        try:
+                                            await ssh_client.disconnect()
+                                        except Exception:
+                                            pass
+                                        await ssh_client.connect()
+                                    else:
+                                        conversion_attempt += 1
                             
-                            if code != 0:
-                                print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
+                            if not conversion_success:
+                                print(f"  ✗ Failed: Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
                                 break
                             
                             # Parse JSON response to extract markdown content
                             try:
-                                response_data = json.loads(stdout)
+                                response_data = json.loads(conversion_output)
                                 
                                 # Extract content from response structure
                                 # Actual format: {"document": {"md_content": "..."}, "status": "success"}
@@ -1357,7 +1384,7 @@ def main_async_remote(args) -> int:
                                             markdown_content = str(result)
                                     else:
                                         # Ultimate fallback
-                                        markdown_content = stdout
+                                        markdown_content = conversion_output
                                 
                                 # Write markdown content to remote file
                                 write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
@@ -1368,10 +1395,10 @@ def main_async_remote(args) -> int:
                                     failed += 1
                                     break
                                 
-                            except (json.JSONDecodeError, KeyError, IndexError) as e:
-                                print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                            except (json.JSONDecodeError, KeyError, IndexError) as json_err:
+                                print(f"  ✗ Failed to parse conversion response: {json_err}", file=sys.stderr)
                                 if DEBUG:
-                                    print(f"  Response: {stdout[:500]}", file=sys.stderr)
+                                    print(f"  Response: {conversion_output[:500]}", file=sys.stderr)
                                 failed += 1
                                 break
                             
