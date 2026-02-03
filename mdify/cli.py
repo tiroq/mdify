@@ -1427,7 +1427,6 @@ def main_async_remote(args) -> int:
                                 
                                 # Write markdown content to local temp file first, then upload via SFTP
                                 # (Piping large content through SSH here-documents can crash the connection)
-                                
                                 content_size_kb = len(markdown_content) / 1024
                                 if not args.quiet:
                                     print(f"  {color.cyan('Writing')} {content_size_kb:.1f}KB markdown via SFTP...", file=sys.stderr)
