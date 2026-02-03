@@ -22,7 +22,11 @@ classifiers = [
     "Topic :: Text Processing :: Markup :: Markdown",
     "Topic :: Utilities",
 ]
-dependencies = ["requests"]
+dependencies = [
+    "requests",
+    "asyncssh>=2.10.0",
+    "pyyaml>=6.0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
