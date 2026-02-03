@@ -1175,7 +1175,9 @@ def main_async_remote(args) -> int:
                 print(f"Error: Input file or directory not found: {args.input}", file=sys.stderr)
                 return 1
             
-            files_to_convert = get_files_to_convert(input_path.resolve(), args.glob, args.recursive)
+            # Store resolved path as base for relative path calculations
+            input_base = input_path.resolve()
+            files_to_convert = get_files_to_convert(input_base, args.glob, args.recursive)
             
             if not files_to_convert:
                 await ssh_client.disconnect()
@@ -1287,9 +1289,9 @@ def main_async_remote(args) -> int:
                             output_dir = Path(args.out_dir)
                             
                             # Preserve directory structure if not flat
-                            if not args.flat and input_path.is_dir():
+                            if not args.flat and input_base.is_dir():
                                 try:
-                                    rel_path = input_file.relative_to(input_path)
+                                    rel_path = input_file.relative_to(input_base)
                                     output_subdir = output_dir / rel_path.parent
                                 except ValueError:
                                     output_subdir = output_dir
