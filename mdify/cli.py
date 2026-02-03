@@ -1335,7 +1335,11 @@ def main_async_remote(args) -> int:
                             conversion_attempt = 0
                             conversion_success = False
                             conversion_output = None
+                            if not args.quiet:
+                                print(f"  [DEBUG] Starting conversion retry loop", file=sys.stderr)
                             while conversion_attempt < 3 and not conversion_success:
+                                if not args.quiet:
+                                    print(f"  [DEBUG] Conversion attempt {conversion_attempt}, loop condition: attempt<3={conversion_attempt < 3}, success={conversion_success}", file=sys.stderr)
                                 try:
                                     if conversion_attempt > 0 and not args.quiet:
                                         # Exponential backoff: 2s, 4s, 8s
@@ -1344,24 +1348,31 @@ def main_async_remote(args) -> int:
                                         await asyncio.sleep(backoff_delay)
                                     
                                     conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
+                                    if not args.quiet:
+                                        print(f"  [DEBUG] run_command returned, code={conv_code}", file=sys.stderr)
                                     
                                     if conv_code == 0:
                                         conversion_success = True
+                                        if not args.quiet:
+                                            print(f"  [DEBUG] Conversion success, breaking loop", file=sys.stderr)
                                         break
                                     else:
                                         # Non-zero exit code - fail without retry for non-connection errors
+                                        if not args.quiet:
+                                            print(f"  [DEBUG] Non-zero exit code {conv_code}, breaking loop", file=sys.stderr)
                                         break
                                 except Exception as conv_exc:
                                     if not args.quiet:
-                                        print(f"  [DEBUG] Conversion exception: type={type(conv_exc).__name__}, msg={str(conv_exc)[:100]}", file=sys.stderr)
+                                        print(f"  [DEBUG] Exception caught: type={type(conv_exc).__name__}, msg={str(conv_exc)[:100]}", file=sys.stderr)
                                     is_conn_err = is_connection_error(conv_exc)
                                     if not args.quiet:
-                                        print(f"  [DEBUG] is_connection_error={is_conn_err}, attempt={conversion_attempt}", file=sys.stderr)
+                                        print(f"  [DEBUG] is_connection_error={is_conn_err}, attempt={conversion_attempt}<2={conversion_attempt < 2}", file=sys.stderr)
                                     if is_conn_err and conversion_attempt < 2:
                                         conversion_attempt += 1
                                         if not args.quiet:
                                             # Exponential backoff: 5s, 10s
                                             backoff_delay = 5 * conversion_attempt
+                                            print(f"  [DEBUG] Connection error detected, incrementing attempt to {conversion_attempt}, backing off {backoff_delay}s", file=sys.stderr)
                                             print(f"  ↻ Connection reset during conversion. Reconnecting in {backoff_delay}s...", file=sys.stderr)
                                         
                                         await asyncio.sleep(backoff_delay)
@@ -1374,17 +1385,23 @@ def main_async_remote(args) -> int:
                                         # Reconnect with retry
                                         try:
                                             await ssh_client.connect()
-                                        except Exception:
                                             if not args.quiet:
-                                                print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
+                                                print(f"  [DEBUG] Reconnected successfully", file=sys.stderr)
+                                        except Exception as reconn_exc:
+                                            if not args.quiet:
+                                                print(f"  ⚠ Reconnection failed: {reconn_exc}", file=sys.stderr)
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
+                                        if not args.quiet:
+                                            print(f"  [DEBUG] Breaking loop: not conn_err or exhausted retries", file=sys.stderr)
                                         if conversion_attempt >= 2 and is_conn_err:
                                             if not args.quiet:
                                                 print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
                             
+                            if not args.quiet:
+                                print(f"  [DEBUG] Exited conversion loop: success={conversion_success}, attempt={conversion_attempt}", file=sys.stderr)
                             if not conversion_success:
                                 print(f"  ✗ Failed: Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
