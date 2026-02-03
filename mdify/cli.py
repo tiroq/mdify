@@ -1336,11 +1336,7 @@ def main_async_remote(args) -> int:
                             conversion_attempt = 0
                             conversion_success = False
                             conversion_output = None
-                            if not args.quiet:
-                                print(f"  [DEBUG] Starting conversion retry loop", file=sys.stderr)
                             while conversion_attempt < 3 and not conversion_success:
-                                if not args.quiet:
-                                    print(f"  [DEBUG] Conversion attempt {conversion_attempt}, loop condition: attempt<3={conversion_attempt < 3}, success={conversion_success}", file=sys.stderr)
                                 try:
                                     if conversion_attempt > 0 and not args.quiet:
                                         # Exponential backoff: 2s, 4s, 8s
@@ -1349,25 +1345,15 @@ def main_async_remote(args) -> int:
                                         await asyncio.sleep(backoff_delay)
                                     
                                     conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
-                                    if not args.quiet:
-                                        print(f"  [DEBUG] run_command returned, code={conv_code}", file=sys.stderr)
                                     
                                     if conv_code == 0:
                                         conversion_success = True
-                                        if not args.quiet:
-                                            print(f"  [DEBUG] Conversion success, breaking loop", file=sys.stderr)
                                         break
                                     else:
                                         # Non-zero exit code - fail without retry for non-connection errors
-                                        if not args.quiet:
-                                            print(f"  [DEBUG] Non-zero exit code {conv_code}, breaking loop", file=sys.stderr)
                                         break
                                 except Exception as conv_exc:
-                                    if not args.quiet:
-                                        print(f"  [DEBUG] Exception caught: type={type(conv_exc).__name__}, msg={str(conv_exc)[:100]}", file=sys.stderr)
                                     is_conn_err = is_connection_error(conv_exc)
-                                    if not args.quiet:
-                                        print(f"  [DEBUG] is_connection_error={is_conn_err}, attempt={conversion_attempt}<2={conversion_attempt < 2}", file=sys.stderr)
                                     if is_conn_err and conversion_attempt < 2:
                                         conversion_attempt += 1
                                         if not args.quiet:
