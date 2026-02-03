@@ -1238,6 +1238,12 @@ def main_async_remote(args) -> int:
             successful = 0
             failed = 0
             
+            def is_connection_error(exc: Exception) -> bool:
+                if isinstance(exc, SSHConnectionError):
+                    return True
+                msg = str(exc).lower()
+                return "broken pipe" in msg or "connection closed" in msg
+            
             try:
                 for idx, input_file in enumerate(files_to_convert, 1):
                     if not args.quiet:
@@ -1246,155 +1252,169 @@ def main_async_remote(args) -> int:
                             file=sys.stderr,
                         )
                     
-                    try:
-                        # Upload file
-                        remote_file_path = f"{work_dir}/{input_file.name}"
-                        
-                        if not args.quiet:
-                            print(f"  {color.cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
-                        
-                        await transfer_manager.upload_file(
-                            local_path=str(input_file),
-                            remote_path=remote_file_path,
-                            overwrite=True,
-                            compress=False,
-                        )
-                        
-                        if not args.quiet:
-                            print(f"  {color.green('✓ Upload complete')}", file=sys.stderr)
-                        
-                        # Convert via remote container
-                        if not args.quiet:
-                            print(f"  {color.cyan('Converting via remote container')}...", file=sys.stderr)
-                        
-                        # Determine output path
-                        output_dir = Path(args.out_dir)
-                        
-                        # Preserve directory structure if not flat
-                        if not args.flat and input_path.is_dir():
-                            try:
-                                rel_path = input_file.relative_to(input_path)
-                                output_subdir = output_dir / rel_path.parent
-                            except ValueError:
-                                output_subdir = output_dir
-                        else:
-                            output_subdir = output_dir
-                        
-                        output_subdir.mkdir(parents=True, exist_ok=True)
-                        output_file = output_subdir / f"{input_file.stem}.md"
-                        
-                        # Check if output exists and skip if not overwrite
-                        if output_file.exists() and not args.overwrite:
-                            if not args.quiet:
-                                print(
-                                    f"  {color.yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
-                                    file=sys.stderr,
-                                )
-                            continue
-                        
-                        # Convert using remote container's HTTP API
-                        # The docling-serve API expects:
-                        # - Endpoint: /v1/convert/file
-                        # - Method: POST with multipart/form-data
-                        # - File field: "files" (note the plural)
-                        # - Additional fields: to_formats=md, do_ocr=true
-                        remote_output_path = f"{work_dir}/{input_file.stem}.md"
-                        
-                        # Build conversion command on remote - use -F for multipart form data
-                        convert_cmd = (
-                            f"curl -X POST "
-                            f"-F 'files=@{remote_file_path}' "
-                            f"-F 'to_formats=md' "
-                            f"-F 'do_ocr=true' "
-                        )
-                        if args.mask:
-                            convert_cmd += f"-F 'mask=true' "
-                        convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
-                        
-                        stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
-                        
-                        if code != 0:
-                            print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
-                            failed += 1
-                            continue
-                        
-                        # Parse JSON response to extract markdown content
+                    attempt = 0
+                    while True:
                         try:
-                            response_data = json.loads(stdout)
+                            # Upload file
+                            remote_file_path = f"{work_dir}/{input_file.name}"
                             
-                            # Extract content from response structure
-                            # Actual format: {"document": {"md_content": "..."}, "status": "success"}
-                            if "document" in response_data:
-                                document = response_data["document"]
-                                if "md_content" in document and document["md_content"]:
-                                    markdown_content = document["md_content"]
-                                elif "text_content" in document and document["text_content"]:
-                                    markdown_content = document["text_content"]
-                                else:
-                                    # Fallback - use whole document
-                                    markdown_content = json.dumps(document, indent=2)
+                            if not args.quiet:
+                                print(f"  {color.cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
+                            
+                            await transfer_manager.upload_file(
+                                local_path=str(input_file),
+                                remote_path=remote_file_path,
+                                overwrite=True,
+                                compress=False,
+                            )
+                            
+                            if not args.quiet:
+                                print(f"  {color.green('✓ Upload complete')}", file=sys.stderr)
+                            
+                            # Convert via remote container
+                            if not args.quiet:
+                                print(f"  {color.cyan('Converting via remote container')}...", file=sys.stderr)
+                            
+                            # Determine output path
+                            output_dir = Path(args.out_dir)
+                            
+                            # Preserve directory structure if not flat
+                            if not args.flat and input_path.is_dir():
+                                try:
+                                    rel_path = input_file.relative_to(input_path)
+                                    output_subdir = output_dir / rel_path.parent
+                                except ValueError:
+                                    output_subdir = output_dir
                             else:
-                                # Legacy format fallback
-                                if "results" in response_data and response_data["results"]:
-                                    result = response_data["results"][0]
-                                    if "content" in result:
-                                        content = result["content"]
-                                        if isinstance(content, dict) and "markdown" in content:
-                                            markdown_content = content["markdown"]
-                                        elif isinstance(content, str):
-                                            markdown_content = content
-                                        else:
-                                            markdown_content = str(content)
-                                    else:
-                                        markdown_content = str(result)
-                                else:
-                                    # Ultimate fallback
-                                    markdown_content = stdout
+                                output_subdir = output_dir
                             
-                            # Write markdown content to remote file
-                            write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
-                            _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                            output_subdir.mkdir(parents=True, exist_ok=True)
+                            output_file = output_subdir / f"{input_file.stem}.md"
                             
-                            if write_code != 0:
-                                print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                            # Check if output exists and skip if not overwrite
+                            if output_file.exists() and not args.overwrite:
+                                if not args.quiet:
+                                    print(
+                                        f"  {color.yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
+                                        file=sys.stderr,
+                                    )
+                                break
+                            
+                            # Convert using remote container's HTTP API
+                            # The docling-serve API expects:
+                            # - Endpoint: /v1/convert/file
+                            # - Method: POST with multipart/form-data
+                            # - File field: "files" (note the plural)
+                            # - Additional fields: to_formats=md, do_ocr=true
+                            remote_output_path = f"{work_dir}/{input_file.stem}.md"
+                            
+                            # Build conversion command on remote - use -F for multipart form data
+                            convert_cmd = (
+                                f"curl -X POST "
+                                f"-F 'files=@{remote_file_path}' "
+                                f"-F 'to_formats=md' "
+                                f"-F 'do_ocr=true' "
+                            )
+                            if args.mask:
+                                convert_cmd += f"-F 'mask=true' "
+                            convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
+                            
+                            stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                            
+                            if code != 0:
+                                print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
                                 failed += 1
+                                break
+                            
+                            # Parse JSON response to extract markdown content
+                            try:
+                                response_data = json.loads(stdout)
+                                
+                                # Extract content from response structure
+                                # Actual format: {"document": {"md_content": "..."}, "status": "success"}
+                                if "document" in response_data:
+                                    document = response_data["document"]
+                                    if "md_content" in document and document["md_content"]:
+                                        markdown_content = document["md_content"]
+                                    elif "text_content" in document and document["text_content"]:
+                                        markdown_content = document["text_content"]
+                                    else:
+                                        # Fallback - use whole document
+                                        markdown_content = json.dumps(document, indent=2)
+                                else:
+                                    # Legacy format fallback
+                                    if "results" in response_data and response_data["results"]:
+                                        result = response_data["results"][0]
+                                        if "content" in result:
+                                            content = result["content"]
+                                            if isinstance(content, dict) and "markdown" in content:
+                                                markdown_content = content["markdown"]
+                                            elif isinstance(content, str):
+                                                markdown_content = content
+                                            else:
+                                                markdown_content = str(content)
+                                        else:
+                                            markdown_content = str(result)
+                                    else:
+                                        # Ultimate fallback
+                                        markdown_content = stdout
+                                
+                                # Write markdown content to remote file
+                                write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
+                                _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
+                                
+                                if write_code != 0:
+                                    print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                                    failed += 1
+                                    break
+                                
+                            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                                print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                                if DEBUG:
+                                    print(f"  Response: {stdout[:500]}", file=sys.stderr)
+                                failed += 1
+                                break
+                            
+                            if not args.quiet:
+                                print(f"  ✓ Conversion complete", file=sys.stderr)
+                            
+                            # Download result
+                            if not args.quiet:
+                                print(f"  Downloading result to {output_file}...", file=sys.stderr)
+                            
+                            await transfer_manager.download_file(
+                                remote_path=remote_output_path,
+                                local_path=str(output_file),
+                                overwrite=True,
+                            )
+                            
+                            if not args.quiet:
+                                print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
+                            
+                            successful += 1
+                            
+                            # Cleanup remote files
+                            await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
+                            
+                            break
+                        except Exception as e:
+                            if is_connection_error(e) and attempt == 0:
+                                attempt += 1
+                                if not args.quiet:
+                                    print("  ↻ Connection lost. Reconnecting...", file=sys.stderr)
+                                try:
+                                    await ssh_client.disconnect()
+                                except Exception:
+                                    pass
+                                await ssh_client.connect()
                                 continue
                             
-                        except (json.JSONDecodeError, KeyError, IndexError) as e:
-                            print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                            print(f"  ✗ Failed: {e}", file=sys.stderr)
                             if DEBUG:
-                                print(f"  Response: {stdout[:500]}", file=sys.stderr)
+                                import traceback
+                                traceback.print_exc(file=sys.stderr)
                             failed += 1
-                            continue
-                        
-                        if not args.quiet:
-                            print(f"  ✓ Conversion complete", file=sys.stderr)
-                        
-                        # Download result
-                        if not args.quiet:
-                            print(f"  Downloading result to {output_file}...", file=sys.stderr)
-                        
-                        await transfer_manager.download_file(
-                            remote_path=remote_output_path,
-                            local_path=str(output_file),
-                            overwrite=True,
-                        )
-                        
-                        if not args.quiet:
-                            print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
-                        
-                        successful += 1
-                        
-                        # Cleanup remote files
-                        await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
-                        
-                    except Exception as e:
-                        print(f"  ✗ Failed: {e}", file=sys.stderr)
-                        if DEBUG:
-                            import traceback
-                            traceback.print_exc(file=sys.stderr)
-                        failed += 1
-                        continue
+                            break
             
             finally:
                 # Stop and remove container
