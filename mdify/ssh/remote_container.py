@@ -80,12 +80,8 @@ class RemoteContainer(DoclingContainer):
             cmd = (
                 f"{self.runtime} run "
                 f"--name {self.name} "
-                f"--publish {self.port}:8000 "
+                f"--publish {self.port}:5001 "
                 f"--detach "
-                f"--health-cmd='curl -f http://localhost:8000/health || exit 1' "
-                f"--health-interval=2s "
-                f"--health-timeout=5s "
-                f"--health-retries=3 "
                 f"{self.image}"
             )
             
