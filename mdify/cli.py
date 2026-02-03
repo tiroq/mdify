@@ -1089,7 +1089,7 @@ def main_async_remote(args) -> int:
             # Apply CLI arguments with highest precedence
             cli_config = SSHConfig(
                 host=args.remote_host,
-                port=args.remote_port or None,
+                port=args.remote_port,
                 username=args.remote_user,
                 key_file=args.remote_key,
                 key_passphrase=args.remote_key_passphrase,

@@ -42,11 +42,7 @@ class RemoteContainer(DoclingContainer):
         )
         
         self.ssh_client = ssh_client
-        self.image = image
-        self.port = port
-        self.runtime = runtime
         self.name = name or f"mdify-{uuid.uuid4().hex[:8]}"
-        self.timeout = timeout
         self.health_check_interval = health_check_interval
         
         self.state = RemoteContainerState(
