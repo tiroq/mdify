@@ -1348,7 +1348,8 @@ def main_async_remote(args) -> int:
                                         conversion_success = True
                                         break
                                     else:
-                                        conversion_attempt += 1
+                                        # Non-zero exit code - fail without retry for non-connection errors
+                                        break
                                 except Exception as conv_exc:
                                     if is_connection_error(conv_exc) and conversion_attempt < 2:
                                         conversion_attempt += 1
@@ -1372,7 +1373,8 @@ def main_async_remote(args) -> int:
                                                 print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
                                             continue
                                     else:
-                                        conversion_attempt += 1
+                                        # Either not a connection error, or we've exhausted retries
+                                        break
                             
                             if not conversion_success:
                                 print(f"  ✗ Failed: Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
