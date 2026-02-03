@@ -1050,6 +1050,9 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
+        # Resolve timeout value: CLI > env > default 1200
+        timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
+        
         # Build SSH config from CLI arguments and SSH config files
         try:
             # Create SSHConfig from CLI arguments
@@ -1142,12 +1145,210 @@ def main_async_remote(args) -> int:
                 print("Remote validation successful", file=sys.stderr)
                 return 0
             
-            # TODO: Phase 2.4.2 - Implement file upload, remote conversion, and download
-            # This will be completed in subsequent task commits
+            # Phase 2.4.2: File upload, remote conversion, and download
             
-            await ssh_client.disconnect()
-            print("✓ Remote execution completed", file=sys.stderr)
-            return 0
+            # Build file list
+            input_path = Path(args.input)
+            if not input_path.exists():
+                await ssh_client.disconnect()
+                print(f"Error: Input file or directory not found: {args.input}", file=sys.stderr)
+                return 1
+            
+            files_to_convert = get_files_to_convert(input_path.resolve(), args.glob, args.recursive)
+            
+            if not files_to_convert:
+                await ssh_client.disconnect()
+                print(f"Error: No supported files found in {args.input}", file=sys.stderr)
+                print(f"  Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
+                return 1
+            
+            if not args.quiet:
+                print(f"\nFound {len(files_to_convert)} file(s) to convert", file=sys.stderr)
+            
+            # Import remote container and transfer manager
+            from mdify.ssh.transfer import FileTransferManager
+            from mdify.ssh.remote_container import RemoteContainer
+            
+            # Determine container runtime and image
+            runtime = ssh_config.container_runtime
+            if not runtime:
+                runtime = await ssh_client.check_container_runtime()
+                if not runtime:
+                    await ssh_client.disconnect()
+                    print("Error: No container runtime found on remote (docker/podman)", file=sys.stderr)
+                    return 1
+            
+            if args.gpu:
+                image = GPU_IMAGE
+            elif args.image:
+                image = args.image
+            else:
+                image = DEFAULT_IMAGE
+            
+            # Create remote container
+            remote_container = RemoteContainer(
+                ssh_client=ssh_client,
+                image=image,
+                port=args.port,
+                runtime=runtime,
+                name=f"mdify-remote-{int(time.time())}",
+                timeout=timeout,
+            )
+            
+            # Create file transfer manager
+            transfer_manager = FileTransferManager(ssh_client)
+            
+            # Create remote work directory
+            work_dir = ssh_config.work_dir or "/tmp/mdify-remote"
+            stdout, stderr, code = await ssh_client.run_command(f"mkdir -p {work_dir}")
+            if code != 0:
+                await ssh_client.disconnect()
+                print(f"Error: Failed to create remote work directory: {work_dir}", file=sys.stderr)
+                return 1
+            
+            # Start remote container
+            if not args.quiet:
+                print(f"\nStarting remote container ({image})...", file=sys.stderr)
+            
+            try:
+                await remote_container.start()
+                if not args.quiet:
+                    print(f"✓ Container started: {remote_container.state.container_name}", file=sys.stderr)
+            except Exception as e:
+                await ssh_client.disconnect()
+                print(f"Error: Failed to start remote container: {e}", file=sys.stderr)
+                return 1
+            
+            # Process files
+            successful = 0
+            failed = 0
+            
+            try:
+                for idx, input_file in enumerate(files_to_convert, 1):
+                    if not args.quiet:
+                        print(f"\n[{idx}/{len(files_to_convert)}] Processing: {input_file.name}", file=sys.stderr)
+                    
+                    try:
+                        # Upload file
+                        remote_file_path = f"{work_dir}/{input_file.name}"
+                        
+                        if not args.quiet:
+                            print(f"  Uploading to {remote_file_path}...", file=sys.stderr)
+                        
+                        await transfer_manager.upload_file(
+                            local_path=str(input_file),
+                            remote_path=remote_file_path,
+                            overwrite=True,
+                        )
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Upload complete", file=sys.stderr)
+                        
+                        # Convert via remote container
+                        if not args.quiet:
+                            print(f"  Converting via remote container...", file=sys.stderr)
+                        
+                        # Determine output path
+                        output_dir = Path(args.out_dir)
+                        
+                        # Preserve directory structure if not flat
+                        if not args.flat and input_path.is_dir():
+                            try:
+                                rel_path = input_file.relative_to(input_path)
+                                output_subdir = output_dir / rel_path.parent
+                            except ValueError:
+                                output_subdir = output_dir
+                        else:
+                            output_subdir = output_dir
+                        
+                        output_subdir.mkdir(parents=True, exist_ok=True)
+                        output_file = output_subdir / f"{input_file.stem}.md"
+                        
+                        # Check if output exists and skip if not overwrite
+                        if output_file.exists() and not args.overwrite:
+                            if not args.quiet:
+                                print(f"  ⊘ Skipped: {output_file} already exists (use --overwrite to replace)", file=sys.stderr)
+                            continue
+                        
+                        # Convert using remote container's HTTP API
+                        remote_output_path = f"{work_dir}/{input_file.stem}.md"
+                        
+                        # Build conversion command on remote
+                        convert_cmd = f"curl -X POST -F 'file=@{remote_file_path}' "
+                        if args.mask:
+                            convert_cmd += "-F 'mask=true' "
+                        convert_cmd += f"{remote_container.state.base_url}/convert -o {remote_output_path}"
+                        
+                        stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
+                        
+                        if code != 0:
+                            print(f"  ✗ Conversion failed: {stderr}", file=sys.stderr)
+                            failed += 1
+                            continue
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Conversion complete", file=sys.stderr)
+                        
+                        # Download result
+                        if not args.quiet:
+                            print(f"  Downloading result to {output_file}...", file=sys.stderr)
+                        
+                        await transfer_manager.download_file(
+                            remote_path=remote_output_path,
+                            local_path=str(output_file),
+                            overwrite=True,
+                        )
+                        
+                        if not args.quiet:
+                            print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
+                        
+                        successful += 1
+                        
+                        # Cleanup remote files
+                        await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
+                        
+                    except Exception as e:
+                        print(f"  ✗ Failed: {e}", file=sys.stderr)
+                        if DEBUG:
+                            import traceback
+                            traceback.print_exc(file=sys.stderr)
+                        failed += 1
+                        continue
+            
+            finally:
+                # Stop and remove container
+                if not args.quiet:
+                    print(f"\nStopping remote container...", file=sys.stderr)
+                
+                try:
+                    await remote_container.stop(force=False)
+                    if not args.quiet:
+                        print(f"✓ Container stopped", file=sys.stderr)
+                except Exception as e:
+                    if not args.quiet:
+                        print(f"Warning: Failed to stop container: {e}", file=sys.stderr)
+                
+                # Cleanup remote work directory
+                try:
+                    await ssh_client.run_command(f"rm -rf {work_dir}")
+                    if not args.quiet:
+                        print(f"✓ Cleaned up remote directory", file=sys.stderr)
+                except Exception as e:
+                    if not args.quiet:
+                        print(f"Warning: Failed to cleanup remote directory: {e}", file=sys.stderr)
+                
+                # Disconnect
+                await ssh_client.disconnect()
+            
+            # Print summary
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"Remote conversion complete:", file=sys.stderr)
+            print(f"  Successful: {successful}", file=sys.stderr)
+            print(f"  Failed:     {failed}", file=sys.stderr)
+            print(f"  Total:      {len(files_to_convert)}", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
+            
+            return 0 if failed == 0 else 1
         
         except SSHConnectionError as e:
             print(f"Error: SSH connection failed: {e}", file=sys.stderr)
