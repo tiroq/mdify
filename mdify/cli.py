@@ -1426,9 +1426,9 @@ def main_async_remote(args) -> int:
                                 # Validate content exists and is not empty/too short
                                 if not markdown_content or len(markdown_content.strip()) < 50:
                                     print(f"  {color_err.error('✗ Failed:')} Empty or invalid conversion result", file=sys.stderr)
-                                    if args.remote_timeout and args.remote_timeout < 300:
+                                    if args.timeout and args.timeout < 300:
                                         print(
-                                            f"  {color_err.info('ℹ Tip:')} Timeout is only {args.remote_timeout}s. Consider increasing with --remote-timeout (default: 3600s)",
+                                            f"  {color_err.info('ℹ Tip:')} Timeout is only {args.timeout}s. Consider increasing with --timeout (default: 3600s for remote)",
                                             file=sys.stderr,
                                         )
                                     failed += 1
