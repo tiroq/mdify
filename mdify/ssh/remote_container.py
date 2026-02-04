@@ -54,14 +54,48 @@ class RemoteContainer(DoclingContainer):
         )
         self.is_healthy = False
     
+    async def _cleanup_port(self) -> None:
+        """Clean up any existing containers using this port.
+        
+        Attempts to find and stop containers that are bound to self.port.
+        This handles the case where a previous container wasn't properly cleaned up.
+        """
+        try:
+            # Find containers using this port
+            # Using docker inspect with port filter
+            cmd = f"{self.runtime} ps -a --filter 'publish={int(self.port)}' --format '{{{{.ID}}}}'"
+            stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=10)
+            
+            if code == 0 and stdout.strip():
+                container_ids = stdout.strip().split('\n')
+                for container_id in container_ids:
+                    container_id = container_id.strip()
+                    if not container_id:
+                        continue
+                    
+                    logger.info(f"Cleaning up existing container on port {self.port}: {container_id}")
+                    
+                    # Stop the container
+                    stop_cmd = f"{self.runtime} stop {container_id}"
+                    await self.ssh_client.run_command(stop_cmd, timeout=10)
+                    
+                    # Remove the container
+                    rm_cmd = f"{self.runtime} rm {container_id}"
+                    await self.ssh_client.run_command(rm_cmd, timeout=10)
+                    
+                    logger.debug(f"Container removed: {container_id}")
+        except Exception as e:
+            logger.debug(f"Port cleanup check failed (non-blocking): {e}")
+
     async def start(self) -> None:
         """Start container on remote server.
         
         Operations:
-        1. Detect container runtime on remote
-        2. Run docker/podman run command
-        3. Extract container ID
-        4. Wait for health check
+        1. Clean up any existing containers using this port
+        2. Detect container runtime on remote
+        3. Run docker/podman run command
+        4. Extract container ID
+        5. Wait for health check
         
         Raises:
             RuntimeError: Container already running or start failed
@@ -71,6 +105,9 @@ class RemoteContainer(DoclingContainer):
             raise RuntimeError(f"Container {self.name} is already running")
         
         logger.info(f"Starting remote container: {self.name}")
+        
+        # Clean up any existing containers on this port
+        await self._cleanup_port()
         
         try:
             # Detect runtime if needed

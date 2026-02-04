@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import logging
+import shlex
 from pathlib import Path
 from typing import Callable
 from mdify.ssh.models import TransferSession
@@ -231,13 +232,18 @@ class FileTransferManager:
                 local_sha256.update(chunk)
         local_checksum = local_sha256.hexdigest()
         
-        # Calculate remote checksum
-        stdout, stderr, code = await self.ssh_client.run_command(
-            f"sha256sum {remote_path} | awk '{{print $1}}'"
+        # Calculate remote checksum (sha256sum or shasum fallback)
+        checksum_cmd = (
+            f"(command -v sha256sum >/dev/null 2>&1 && sha256sum {shlex.quote(remote_path)} | awk '{{print $1}}') "
+            f"|| (command -v shasum >/dev/null 2>&1 && shasum -a 256 {shlex.quote(remote_path)} | awk '{{print $1}}')"
         )
+        stdout, stderr, code = await self.ssh_client.run_command(checksum_cmd)
         
         if code == 0:
             remote_checksum = stdout.strip()
+            if not remote_checksum:
+                logger.warning("Could not verify checksum: remote checksum unavailable")
+                return
             
             if local_checksum != remote_checksum:
                 raise ValueError(

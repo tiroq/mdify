@@ -11,9 +11,11 @@ import argparse
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -271,19 +273,22 @@ def check_for_update(force: bool = False) -> None:
 
     _update_last_check_time()
 
+    from mdify.formatting import Colorizer
+    
     if not _compare_versions(__version__, remote_version):
         if force:
-            print(f"mdify is up to date (version {__version__})")
+            color = Colorizer(sys.stdout)
+            print(color.success(f"✓ mdify is up to date (v{__version__})"))
         return
 
-    print(f"\n{'=' * 50}")
-    print(f"A new version of mdify-cli is available!")
-    print(f"  Current version: {__version__}")
-    print(f"  Latest version:  {remote_version}")
-    print(f"{'=' * 50}")
-    print(f"\nTo upgrade, run:")
-    print(f"  pipx upgrade mdify-cli")
-    print(f"  # or: pip install --upgrade mdify-cli\n")
+    color = Colorizer(sys.stdout)
+    print(f"\n{color.bright_yellow('=' * 60)}")
+    print(color.bold_yellow("🎉 A new version of mdify-cli is available!"))
+    print(f"{color.dim_white('  Current:')} {__version__} → {color.bright_green(remote_version)}")
+    print(f"{color.bright_yellow('=' * 60)}")
+    print(f"\n{color.cyan('To upgrade, run:')}")
+    print(f"  {color.bold('pipx upgrade mdify-cli')}")
+    print(f"  {color.dim_white('# or: pip install --upgrade mdify-cli')}\n")
 
 
 # =============================================================================
@@ -883,7 +888,7 @@ Examples:
         "--timeout",
         type=int,
         default=None,
-        help="Conversion timeout in seconds (default: 1200, can be set via MDIFY_TIMEOUT env var)",
+        help="Conversion timeout in seconds (default: 1200s for local, 3600s for remote with large PDFs, can be set via MDIFY_TIMEOUT env var)",
     )
 
     parser.add_argument(
@@ -1050,9 +1055,16 @@ def main_async_remote(args) -> int:
     
     async def async_main() -> int:
         """Async implementation of remote conversion."""
+        from mdify.formatting import Colorizer
+
+        color = Colorizer(sys.stderr)
         
         # Resolve timeout value: CLI > env > default 1200
         timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
+        
+        # For remote operations, extend timeout significantly for large PDF processing
+        # Remote conversions include network latency, file upload/download, and OCR processing
+        remote_conversion_timeout = max(timeout, 3600)  # At least 1 hour for remote conversion
         
         # Build SSH config from CLI arguments and SSH config files
         try:
@@ -1104,57 +1116,57 @@ def main_async_remote(args) -> int:
             
             # Connect to remote server
             if not args.quiet:
-                print(f"Connecting to {ssh_config.host}:{ssh_config.port}...", file=sys.stderr)
+                print(color.bright_cyan(f"🔗 Connecting to {color.bold(ssh_config.host)}:{ssh_config.port}..."), file=sys.stderr)
             
             await ssh_client.connect()
             
             if not args.quiet:
-                print(f"✓ Connected to {ssh_config.host}", file=sys.stderr)
+                print(color.success(f"✓ Connected to {ssh_config.host}"), file=sys.stderr)
             
             # Validate remote resources if not skipped
             if not args.remote_skip_validation:
                 if not args.quiet:
-                    print("Validating remote resources...", file=sys.stderr)
+                    print(color.cyan("🔍 Validating remote resources..."), file=sys.stderr)
                 
                 validation_result = await ssh_client.validate_remote_resources()
                 
                 if not validation_result.get("can_connect"):
                     await ssh_client.disconnect()
-                    print("Error: Cannot connect to remote server", file=sys.stderr)
+                    print(color.error("✗ Cannot connect to remote server"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("work_dir_writable"):
                     await ssh_client.disconnect()
-                    print(f"Error: Work directory not writable: {ssh_config.work_dir}", file=sys.stderr)
+                    print(color.error(f"✗ Work directory not writable: {ssh_config.work_dir}"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("container_runtime_available"):
                     await ssh_client.disconnect()
                     runtime_str = ssh_config.container_runtime or "docker/podman"
-                    print(f"Error: Container runtime not available: {runtime_str}", file=sys.stderr)
+                    print(color.error(f"✗ Container runtime not available: {runtime_str}"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("disk_space_min_5gb"):
-                    print(f"Warning: Less than 5GB available on remote", file=sys.stderr)
+                    print(color.warning(f"⚠ Less than 5GB available on remote"), file=sys.stderr)
                     if not args.yes and sys.stdin.isatty():
                         if not confirm_proceed("Continue anyway?"):
                             await ssh_client.disconnect()
                             return 130
                 
                 if not validation_result.get("memory_min_2gb"):
-                    print(f"Warning: Less than 2GB available memory on remote", file=sys.stderr)
+                    print(color.warning(f"⚠ Less than 2GB available memory on remote"), file=sys.stderr)
                     if not args.yes and sys.stdin.isatty():
                         if not confirm_proceed("Continue anyway?"):
                             await ssh_client.disconnect()
                             return 130
                 
                 if not args.quiet:
-                    print("✓ All remote resources validated", file=sys.stderr)
+                    print(color.success("✓ All remote resources validated"), file=sys.stderr)
             
             # If --remote-validate-only, exit here
             if args.remote_validate_only:
                 await ssh_client.disconnect()
-                print("Remote validation successful", file=sys.stderr)
+                print(color.success("✓ Remote validation successful"), file=sys.stderr)
                 return 0
             
             # Phase 2.4.2: File upload, remote conversion, and download
@@ -1163,19 +1175,22 @@ def main_async_remote(args) -> int:
             input_path = Path(args.input)
             if not input_path.exists():
                 await ssh_client.disconnect()
-                print(f"Error: Input file or directory not found: {args.input}", file=sys.stderr)
+                print(f"{color.error('✗ Error:')} Input file or directory not found: {args.input}", file=sys.stderr)
                 return 1
             
-            files_to_convert = get_files_to_convert(input_path.resolve(), args.glob, args.recursive)
+            # Store resolved path as base for relative path calculations
+            input_base = input_path.resolve()
+            files_to_convert = get_files_to_convert(input_base, args.glob, args.recursive)
             
             if not files_to_convert:
                 await ssh_client.disconnect()
-                print(f"Error: No supported files found in {args.input}", file=sys.stderr)
-                print(f"  Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
+                print(f"{color.error('✗ Error:')} No supported files found in {args.input}", file=sys.stderr)
+                print(f"  {color.dim_white(f'Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}')} ", file=sys.stderr)
                 return 1
             
             if not args.quiet:
-                print(f"\nFound {len(files_to_convert)} file(s) to convert", file=sys.stderr)
+                print(color.cyan(f"Found {len(files_to_convert)} file(s) to convert"), file=sys.stderr)
+                print(color.cyan(f"Conversion timeout: {remote_conversion_timeout}s (for large PDFs with OCR)"), file=sys.stderr)
             
             # Import remote container and transfer manager
             from mdify.ssh.transfer import FileTransferManager
@@ -1220,12 +1235,12 @@ def main_async_remote(args) -> int:
             
             # Start remote container
             if not args.quiet:
-                print(f"\nStarting remote container ({image})...", file=sys.stderr)
+                print(color.cyan(f"\nStarting remote container ({image})..."), file=sys.stderr)
             
             try:
                 await remote_container.start()
                 if not args.quiet:
-                    print(f"✓ Container started: {remote_container.state.container_name}", file=sys.stderr)
+                    print(color.green(f"✓ Container started: {remote_container.state.container_name}"), file=sys.stderr)
             except Exception as e:
                 await ssh_client.disconnect()
                 print(f"Error: Failed to start remote container: {e}", file=sys.stderr)
@@ -1235,175 +1250,277 @@ def main_async_remote(args) -> int:
             successful = 0
             failed = 0
             
+            def is_connection_error(exc: Exception) -> bool:
+                if isinstance(exc, SSHConnectionError):
+                    return True
+                msg = str(exc).lower()
+                # Errno 32 = Broken pipe, Errno 54 = Connection reset by peer
+                return any(x in msg for x in ["broken pipe", "connection closed", "connection reset", "errno 32", "errno 54", "ssh connection"])
+            
             try:
                 for idx, input_file in enumerate(files_to_convert, 1):
                     if not args.quiet:
-                        print(f"\n[{idx}/{len(files_to_convert)}] Processing: {input_file.name}", file=sys.stderr)
+                        print(
+                            f"\n{color.cyan(f'[{idx}/{len(files_to_convert)}] Processing:')} {input_file.name}",
+                            file=sys.stderr,
+                        )
                     
-                    try:
-                        # Upload file
-                        remote_file_path = f"{work_dir}/{input_file.name}"
-                        
-                        if not args.quiet:
-                            print(f"  Uploading to {remote_file_path}...", file=sys.stderr)
-                        
-                        await transfer_manager.upload_file(
-                            local_path=str(input_file),
-                            remote_path=remote_file_path,
-                            overwrite=True,
-                        )
-                        
-                        if not args.quiet:
-                            print(f"  ✓ Upload complete", file=sys.stderr)
-                        
-                        # Convert via remote container
-                        if not args.quiet:
-                            print(f"  Converting via remote container...", file=sys.stderr)
-                        
-                        # Determine output path
-                        output_dir = Path(args.out_dir)
-                        
-                        # Preserve directory structure if not flat
-                        if not args.flat and input_path.is_dir():
-                            try:
-                                rel_path = input_file.relative_to(input_path)
-                                output_subdir = output_dir / rel_path.parent
-                            except ValueError:
-                                output_subdir = output_dir
-                        else:
-                            output_subdir = output_dir
-                        
-                        output_subdir.mkdir(parents=True, exist_ok=True)
-                        output_file = output_subdir / f"{input_file.stem}.md"
-                        
-                        # Check if output exists and skip if not overwrite
-                        if output_file.exists() and not args.overwrite:
-                            if not args.quiet:
-                                print(f"  ⊘ Skipped: {output_file} already exists (use --overwrite to replace)", file=sys.stderr)
-                            continue
-                        
-                        # Convert using remote container's HTTP API
-                        # The docling-serve API expects:
-                        # - Endpoint: /v1/convert/file
-                        # - Method: POST with multipart/form-data
-                        # - File field: "files" (note the plural)
-                        # - Additional fields: to_formats=md, do_ocr=true
-                        remote_output_path = f"{work_dir}/{input_file.stem}.md"
-                        
-                        # Build conversion command on remote - use -F for multipart form data
-                        convert_cmd = (
-                            f"curl -X POST "
-                            f"-F 'files=@{remote_file_path}' "
-                            f"-F 'to_formats=md' "
-                            f"-F 'do_ocr=true' "
-                        )
-                        if args.mask:
-                            convert_cmd += f"-F 'mask=true' "
-                        convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
-                        
-                        stdout, stderr, code = await ssh_client.run_command(convert_cmd, timeout=timeout)
-                        
-                        if code != 0:
-                            print(f"  ✗ Conversion failed (curl error code {code}): {stderr}", file=sys.stderr)
-                            failed += 1
-                            continue
-                        
-                        # Parse JSON response to extract markdown content
+                    attempt = 0
+                    while attempt <= 1:  # Max 2 attempts (0 and 1)
                         try:
-                            response_data = json.loads(stdout)
+                            # Upload file
+                            remote_file_path = f"{work_dir}/{input_file.name}"
                             
-                            # Extract content from response structure
-                            # Actual format: {"document": {"md_content": "..."}, "status": "success"}
-                            if "document" in response_data:
-                                document = response_data["document"]
-                                if "md_content" in document and document["md_content"]:
-                                    markdown_content = document["md_content"]
-                                elif "text_content" in document and document["text_content"]:
-                                    markdown_content = document["text_content"]
-                                else:
-                                    # Fallback - use whole document
-                                    markdown_content = json.dumps(document, indent=2)
-                            else:
-                                # Legacy format fallback
-                                if "results" in response_data and response_data["results"]:
-                                    result = response_data["results"][0]
-                                    if "content" in result:
-                                        content = result["content"]
-                                        if isinstance(content, dict) and "markdown" in content:
-                                            markdown_content = content["markdown"]
-                                        elif isinstance(content, str):
-                                            markdown_content = content
-                                        else:
-                                            markdown_content = str(content)
+                            if not args.quiet:
+                                print(f"  {color.cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
+                            
+                            await transfer_manager.upload_file(
+                                local_path=str(input_file),
+                                remote_path=remote_file_path,
+                                overwrite=True,
+                                compress=False,
+                            )
+                            
+                            if not args.quiet:
+                                print(f"  {color.green('✓ Upload complete')}", file=sys.stderr)
+                            
+                            # Convert via remote container
+                            if not args.quiet:
+                                print(f"  {color.cyan('Converting via remote container')}...", file=sys.stderr)
+                            
+                            # Determine output path
+                            output_dir = Path(args.out_dir)
+                            output_file = get_output_path(input_file, input_base, output_dir, args.flat)
+                            
+                            # Ensure output directory exists
+                            output_file.parent.mkdir(parents=True, exist_ok=True)
+                            
+                            # Check if output exists and skip if not overwrite
+                            if output_file.exists() and not args.overwrite:
+                                if not args.quiet:
+                                    print(
+                                        f"  {color.yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
+                                        file=sys.stderr,
+                                    )
+                                break
+                            
+                            # Convert using remote container's HTTP API
+                            # The docling-serve API expects:
+                            # - Endpoint: /v1/convert/file
+                            # - Method: POST with multipart/form-data
+                            # - File field: "files" (note the plural)
+                            # - Additional fields: to_formats=md, do_ocr=true
+                            remote_output_path = f"{work_dir}/{input_file.stem}.md"
+                            
+                            # Build conversion command on remote - use -F for multipart form data
+                            # Important: use generous timeouts since large PDFs with OCR take time
+                            # --connect-timeout: max time to establish connection (60s)
+                            # --max-time: max total operation time (extended timeout)
+                            convert_cmd = (
+                                f"curl -X POST "
+                                f"--connect-timeout 60 "
+                                f"--max-time {remote_conversion_timeout} "
+                                f"-F 'files=@{shlex.quote(remote_file_path)}' "
+                                f"-F 'to_formats=md' "
+                                f"-F 'do_ocr=true' "
+                            )
+                            if args.mask:
+                                convert_cmd += f"-F 'mask=true' "
+                            convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
+                            
+                            # Retry conversion command with exponential backoff
+                            conversion_attempt = 0
+                            conversion_success = False
+                            conversion_output = None
+                            while conversion_attempt < 3 and not conversion_success:
+                                conversion_attempt += 1
+                                try:
+                                    if conversion_attempt > 1 and not args.quiet:
+                                        # Exponential backoff: 2s, 4s
+                                        backoff_delay = 2 ** (conversion_attempt - 1)
+                                        print(f"  ↻ Conversion retry {conversion_attempt - 1} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
+                                        await asyncio.sleep(backoff_delay)
+                                    
+                                    conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
+                                    
+                                    if conv_code == 0:
+                                        conversion_success = True
+                                        break
                                     else:
-                                        markdown_content = str(result)
-                                else:
-                                    # Ultimate fallback
-                                    markdown_content = stdout
+                                        # Non-zero exit code - fail without retry for non-connection errors
+                                        break
+                                except Exception as conv_exc:
+                                    is_conn_err = is_connection_error(conv_exc)
+                                    if is_conn_err and conversion_attempt < 3:
+                                        if not args.quiet:
+                                            # Exponential backoff: 5s, 10s
+                                            backoff_delay = 5 * conversion_attempt
+                                            print(f"  ↻ Connection reset during conversion. Reconnecting in {backoff_delay}s...", file=sys.stderr)
+                                        
+                                        await asyncio.sleep(backoff_delay)
+                                        
+                                        try:
+                                            await ssh_client.disconnect()
+                                        except Exception:
+                                            # Best-effort disconnect; ignore errors (e.g., already closed) before reconnecting
+                                            pass
+                                        
+                                        # Reconnect with retry
+                                        try:
+                                            await ssh_client.connect()
+                                        except Exception:
+                                            if not args.quiet:
+                                                print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
+                                            continue
+                                    else:
+                                        # Either not a connection error, or we've exhausted retries
+                                        if conversion_attempt >= 3 and is_conn_err:
+                                            if not args.quiet:
+                                                print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
+                                        break
                             
-                            # Write markdown content to remote file
-                            write_cmd = f"cat > {remote_output_path} << 'MDIFY_EOF'\n{markdown_content}\nMDIFY_EOF"
-                            _, _, write_code = await ssh_client.run_command(write_cmd, timeout=30)
-                            
-                            if write_code != 0:
-                                print(f"  ✗ Failed to write markdown output", file=sys.stderr)
+                            if not conversion_success:
+                                print(f"  {color.error('✗ Failed:')} Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
+                                break
+                            
+                            # Parse JSON response to extract markdown content
+                            try:
+                                response_data = json.loads(conversion_output)
+                                
+                                # Extract content from response structure
+                                # Actual format: {"document": {"md_content": "..."}, "status": "success"}
+                                if "document" in response_data:
+                                    document = response_data["document"]
+                                    if "md_content" in document and document["md_content"]:
+                                        markdown_content = document["md_content"]
+                                    elif "text_content" in document and document["text_content"]:
+                                        markdown_content = document["text_content"]
+                                    else:
+                                        # Fallback - use whole document
+                                        markdown_content = json.dumps(document, indent=2)
+                                else:
+                                    # Legacy format fallback
+                                    if "results" in response_data and response_data["results"]:
+                                        result = response_data["results"][0]
+                                        if "content" in result:
+                                            content = result["content"]
+                                            if isinstance(content, dict) and "markdown" in content:
+                                                markdown_content = content["markdown"]
+                                            elif isinstance(content, str):
+                                                markdown_content = content
+                                            else:
+                                                markdown_content = str(content)
+                                        else:
+                                            markdown_content = str(result)
+                                    else:
+                                        # Ultimate fallback
+                                        markdown_content = conversion_output
+                                
+                                # Write markdown content to local temp file first, then upload via SFTP
+                                # (Piping large content through SSH here-documents can crash the connection)
+                                content_size_kb = len(markdown_content) / 1024
+                                if not args.quiet:
+                                    print(f"  {color.cyan('Writing')} {content_size_kb:.1f}KB markdown via SFTP...", file=sys.stderr)
+                                
+                                temp_path = None
+                                try:
+                                    # Write to temporary local file
+                                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as temp_file:
+                                        temp_file.write(markdown_content)
+                                        temp_path = temp_file.name
+                                    
+                                    # Upload via SFTP (more reliable for large files)
+                                    await transfer_manager.upload_file(
+                                        local_path=temp_path,
+                                        remote_path=remote_output_path,
+                                        overwrite=True,
+                                        compress=False,
+                                    )
+                                    
+                                    if not args.quiet:
+                                        print(f"  {color.green('✓')} Markdown written", file=sys.stderr)
+                                except Exception as write_exc:
+                                    if not args.quiet:
+                                        print(f"  ✗ Failed to write markdown: {write_exc}", file=sys.stderr)
+                                    failed += 1
+                                    break
+                                finally:
+                                    # Cleanup temp file
+                                    if temp_path:
+                                        try:
+                                            os.unlink(temp_path)
+                                        except Exception as cleanup_exc:
+                                            if DEBUG:
+                                                print(f"  ! Failed to remove temporary file {temp_path}: {cleanup_exc}", file=sys.stderr)
+                                
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                print(f"  ✗ Failed to parse conversion response", file=sys.stderr)
+                                if DEBUG:
+                                    print(f"  Response: {conversion_output[:500]}", file=sys.stderr)
+                                failed += 1
+                                break
+                            
+                            if not args.quiet:
+                                print(f"  ✓ Conversion complete", file=sys.stderr)
+                            
+                            # Download result
+                            if not args.quiet:
+                                print(color.cyan(f"  Downloading result to {output_file}..."), file=sys.stderr)
+                            
+                            await transfer_manager.download_file(
+                                remote_path=remote_output_path,
+                                local_path=str(output_file),
+                                overwrite=True,
+                            )
+                            
+                            if not args.quiet:
+                                print(color.green(f"  ✓ Download complete: {output_file}"), file=sys.stderr)
+                            
+                            successful += 1
+                            
+                            # Cleanup remote files
+                            await ssh_client.run_command(f"rm -f {shlex.quote(remote_file_path)} {shlex.quote(remote_output_path)}")
+                            
+                            break
+                        except Exception as e:
+                            if is_connection_error(e) and attempt == 0:
+                                attempt += 1
+                                if not args.quiet:
+                                    print(color.yellow("  ↻ Connection lost. Reconnecting..."), file=sys.stderr)
+                                try:
+                                    await ssh_client.disconnect()
+                                except Exception:
+                                    # Best-effort disconnect; ignore errors since we'll immediately reconnect.
+                                    pass
+                                await ssh_client.connect()
                                 continue
                             
-                        except (json.JSONDecodeError, KeyError, IndexError) as e:
-                            print(f"  ✗ Failed to parse conversion response: {e}", file=sys.stderr)
+                            print(f"  {color.error('✗ Failed:')} {str(e)}", file=sys.stderr)
                             if DEBUG:
-                                print(f"  Response: {stdout[:500]}", file=sys.stderr)
+                                import traceback
+                                traceback.print_exc(file=sys.stderr)
                             failed += 1
-                            continue
-                        
-                        if not args.quiet:
-                            print(f"  ✓ Conversion complete", file=sys.stderr)
-                        
-                        # Download result
-                        if not args.quiet:
-                            print(f"  Downloading result to {output_file}...", file=sys.stderr)
-                        
-                        await transfer_manager.download_file(
-                            remote_path=remote_output_path,
-                            local_path=str(output_file),
-                            overwrite=True,
-                        )
-                        
-                        if not args.quiet:
-                            print(f"  ✓ Download complete: {output_file}", file=sys.stderr)
-                        
-                        successful += 1
-                        
-                        # Cleanup remote files
-                        await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
-                        
-                    except Exception as e:
-                        print(f"  ✗ Failed: {e}", file=sys.stderr)
-                        if DEBUG:
-                            import traceback
-                            traceback.print_exc(file=sys.stderr)
-                        failed += 1
-                        continue
+                            break
             
             finally:
                 # Stop and remove container
                 if not args.quiet:
-                    print(f"\nStopping remote container...", file=sys.stderr)
+                    print(color.cyan(f"\nStopping remote container..."), file=sys.stderr)
                 
                 try:
                     await remote_container.stop(force=False)
                     if not args.quiet:
-                        print(f"✓ Container stopped", file=sys.stderr)
+                        print(color.green(f"✓ Container stopped"), file=sys.stderr)
                 except Exception as e:
                     if not args.quiet:
-                        print(f"Warning: Failed to stop container: {e}", file=sys.stderr)
+                        print(color.yellow(f"Warning: Failed to stop container: {e}"), file=sys.stderr)
                 
                 # Cleanup remote work directory
                 try:
-                    await ssh_client.run_command(f"rm -rf {work_dir}")
+                    await ssh_client.run_command(f"rm -rf {shlex.quote(work_dir)}")
                     if not args.quiet:
-                        print(f"✓ Cleaned up remote directory", file=sys.stderr)
+                        print(color.green(f"✓ Cleaned up remote directory"), file=sys.stderr)
                 except Exception as e:
                     if not args.quiet:
                         print(f"Warning: Failed to cleanup remote directory: {e}", file=sys.stderr)
@@ -1412,21 +1529,32 @@ def main_async_remote(args) -> int:
                 await ssh_client.disconnect()
             
             # Print summary
-            print(f"\n{'='*60}", file=sys.stderr)
-            print(f"Remote conversion complete:", file=sys.stderr)
-            print(f"  Successful: {successful}", file=sys.stderr)
-            print(f"  Failed:     {failed}", file=sys.stderr)
-            print(f"  Total:      {len(files_to_convert)}", file=sys.stderr)
-            print(f"{'='*60}", file=sys.stderr)
+            print(color.cyan(f"\n{'='*60}"), file=sys.stderr)
+            print(color.bold_cyan("📊 Remote Conversion Summary"), file=sys.stderr)
+            print(color.cyan(f"{'='*60}"), file=sys.stderr)
+            
+            # Format summary with emojis and colors
+            total = len(files_to_convert)
+            success_pct = f" ({successful}/{total})" if total > 0 else ""
+            failed_pct = f" ({failed}/{total})" if total > 0 else ""
+            skipped_pct = f" ({total - successful - failed}/{total})" if total > 0 else ""
+            
+            print(f"  {color.green('✓ Successful:')} {color.bold_green(str(successful))}{success_pct}", file=sys.stderr)
+            if failed > 0:
+                print(f"  {color.red('✗ Failed:')} {color.bold_red(str(failed))}{failed_pct}", file=sys.stderr)
+            if (total - successful - failed) > 0:
+                print(f"  {color.yellow('⊘ Skipped:')} {color.bold_yellow(str(total - successful - failed))}{skipped_pct}", file=sys.stderr)
+            print(f"  {color.cyan('Total:')} {color.bold(str(total))}", file=sys.stderr)
+            print(color.cyan(f"{'='*60}"), file=sys.stderr)
             
             return 0 if failed == 0 else 1
         
         except SSHAuthError as e:
-            print(f"Error: SSH authentication failed: {e}", file=sys.stderr)
+            print(color.yellow(f"Error: SSH authentication failed: {e}"), file=sys.stderr)
             print("  Check your SSH key, passphrase, or username", file=sys.stderr)
             return 1
         except SSHConnectionError as e:
-            print(f"Error: SSH connection failed: {e}", file=sys.stderr)
+            print(color.yellow(f"Error: SSH connection failed: {e}"), file=sys.stderr)
             if hasattr(e, 'host') and hasattr(e, 'port'):
                 print(f"  Host: {e.host}:{e.port}", file=sys.stderr)
             return 1
@@ -1464,7 +1592,12 @@ def main_async_remote(args) -> int:
 
 def main() -> int:
     """Main entry point for the CLI."""
-    print(f"mdify v{__version__}", file=sys.stderr)
+    from mdify.formatting import Colorizer
+    
+    color_stderr = Colorizer(sys.stderr)
+    color_stdout = Colorizer(sys.stdout)
+    
+    print(color_stderr.bold_cyan(f"📄 mdify v{__version__}"), file=sys.stderr)
     args = parse_args()
 
     # Handle --check-update flag
@@ -1612,34 +1745,34 @@ def main() -> int:
 
     # Validate input
     if not input_path.exists():
-        print(f"Error: Input path does not exist: {input_path}", file=sys.stderr)
+        print(f"{color_stderr.error('✗ Error:')} Input path does not exist: {input_path}", file=sys.stderr)
         return 1
 
     # Get files to convert
     try:
         files_to_convert = get_files_to_convert(input_path, args.glob, args.recursive)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        print(f"{color_stderr.error('✗ Error:')} {e}", file=sys.stderr)
         return 1
 
     if not files_to_convert:
-        print(f"No files found to convert in: {input_path}", file=sys.stderr)
+        print(f"{color_stderr.warning('⚠ Warning:')} No files found to convert in: {input_path}", file=sys.stderr)
         return 1
 
     total_files = len(files_to_convert)
     total_size = sum(f.stat().st_size for f in files_to_convert)
 
     if not args.quiet:
-        print(f"Found {total_files} file(s) to convert ({format_size(total_size)})")
-        print(f"Source: {input_path.resolve()}")
-        print(f"Output: {output_dir.resolve()}")
-        print(f"Using runtime: {runtime}")
-        print(f"Using image: {image}")
+        print(f"{color_stdout.bright_cyan('📦 Found')} {color_stdout.bold(str(total_files))} {color_stdout.bright_cyan('file(s)')} {color_stdout.dim_white(f'({format_size(total_size)})')}")
+        print(f"{color_stdout.cyan('📁 Source:')} {color_stdout.bright_white(str(input_path.resolve()))}")
+        print(f"{color_stdout.cyan('💾 Output:')} {color_stdout.bright_white(str(output_dir.resolve()))}")
+        print(f"{color_stdout.cyan('🐳 Runtime:')} {color_stdout.bright_white(runtime)}")
+        print(f"{color_stdout.cyan('🖼️  Image:')} {color_stdout.dim_white(image)}")
         print()
 
     if args.mask:
         print(
-            "Warning: --mask is not supported with docling-serve and will be ignored",
+            color_stderr.warning("⚠ --mask is not supported with docling-serve and will be ignored"),
             file=sys.stderr,
         )
 
@@ -1656,7 +1789,7 @@ def main() -> int:
 
     try:
         if not args.quiet:
-            print(f"Starting docling-serve container...\n")
+            print(f"{color_stdout.bright_cyan('▶️  Starting')} {color_stdout.bright_white('docling-serve')} {color_stdout.bright_cyan('container')}...\n")
 
         # Apply resource profile
         profile = RESOURCE_PROFILES[args.profile]
@@ -1896,21 +2029,25 @@ def main() -> int:
         # Print summary
         if not args.quiet:
             print()
-            print("=" * 50)
-            print("Conversion Summary:")
-            print(f"  Total files:     {total_files}")
-            print(f"  Successful:      {success_count}")
-            print(f"  Skipped:         {skipped_count}")
-            print(f"  Failed:          {failed_count}")
-            print(f"  Total time:      {format_duration(total_elapsed)}")
-            print("=" * 50)
+            print(color_stdout.cyan("=" * 60))
+            print(color_stdout.bold_cyan("📊 Local Conversion Summary"))
+            print(color_stdout.cyan("=" * 60))
+            print(f"  {color_stdout.cyan('Total files:')} {color_stdout.bold(str(total_files))}")
+            if success_count > 0:
+                print(f"  {color_stdout.green('✓ Successful:')} {color_stdout.bold_green(str(success_count))}")
+            if skipped_count > 0:
+                print(f"  {color_stdout.yellow('⊘ Skipped:')} {color_stdout.bold_yellow(str(skipped_count))}")
+            if failed_count > 0:
+                print(f"  {color_stdout.red('✗ Failed:')} {color_stdout.bold_red(str(failed_count))}")
+            print(f"  {color_stdout.cyan('Total time:')} {color_stdout.bright_cyan(format_duration(total_elapsed))}")
+            print(color_stdout.cyan("=" * 60))
 
     except KeyboardInterrupt:
         if not args.quiet:
-            print("\n\nInterrupted by user. Container stopped.")
+            print(f"\n\n{color_stdout.warning('⚠ Interrupted by user. Container stopped.')}")
             if success_count > 0 or skipped_count > 0 or failed_count > 0:
                 print(
-                    f"Partial progress: {success_count} successful, {failed_count} failed, {skipped_count} skipped"
+                    f"{color_stdout.dim_white('Partial progress:')} {color_stdout.green(str(success_count))} successful, {color_stdout.red(str(failed_count))} failed, {color_stdout.yellow(str(skipped_count))} skipped"
                 )
         return 130
 
