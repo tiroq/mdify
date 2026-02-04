@@ -3,6 +3,7 @@
 import gzip
 import hashlib
 import logging
+import shlex
 from pathlib import Path
 from typing import Callable
 from mdify.ssh.models import TransferSession
@@ -233,8 +234,8 @@ class FileTransferManager:
         
         # Calculate remote checksum (sha256sum or shasum fallback)
         checksum_cmd = (
-            f"(command -v sha256sum >/dev/null 2>&1 && sha256sum {remote_path} | awk '{{print $1}}') "
-            f"|| (command -v shasum >/dev/null 2>&1 && shasum -a 256 {remote_path} | awk '{{print $1}}')"
+            f"(command -v sha256sum >/dev/null 2>&1 && sha256sum {shlex.quote(remote_path)} | awk '{{print $1}}') "
+            f"|| (command -v shasum >/dev/null 2>&1 && shasum -a 256 {shlex.quote(remote_path)} | awk '{{print $1}}')"
         )
         stdout, stderr, code = await self.ssh_client.run_command(checksum_cmd)
         
