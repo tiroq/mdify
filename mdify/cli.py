@@ -1381,7 +1381,8 @@ def main_async_remote(args) -> int:
                                         break
                             
                             if not conversion_success:
-                                print(f"  ✗ Failed: Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
+                                color_error = Colorizer(sys.stderr)
+                                print(f"  {color_error.error('✗ Failed:')} Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
                                 break
                             
@@ -1493,7 +1494,8 @@ def main_async_remote(args) -> int:
                                 await ssh_client.connect()
                                 continue
                             
-                            print(f"  ✗ Failed: {e}", file=sys.stderr)
+                            color_err = Colorizer(sys.stderr)
+                            print(f"  {color_err.error('✗ Failed:')} {str(e)}", file=sys.stderr)
                             if DEBUG:
                                 import traceback
                                 traceback.print_exc(file=sys.stderr)
