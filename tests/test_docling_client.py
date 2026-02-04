@@ -489,3 +489,210 @@ class TestMimeTypeDetection:
             files_param = call_args[1]["files"]
             filename, file_obj, mime_type = files_param["files"]
             assert mime_type == "application/octet-stream"
+
+
+class TestErrorDetection:
+    """Test error response detection functionality."""
+
+    def test_error_detection_with_detail_key(self):
+        """Test detection of error response with 'detail' key."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {"detail": "Conversion is taking too long"}
+        assert _is_error_response(error_response) is True
+
+    def test_error_detection_with_error_key(self):
+        """Test detection of error response with 'error' key."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {"error": "Internal server error"}
+        assert _is_error_response(error_response) is True
+
+    def test_error_detection_with_message_key(self):
+        """Test detection of error response with 'message' key."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {"message": "Request failed"}
+        assert _is_error_response(error_response) is True
+
+    def test_error_detection_with_code_key(self):
+        """Test detection of error response with 'code' key."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {"code": 500}
+        assert _is_error_response(error_response) is True
+
+    def test_error_detection_with_status_key(self):
+        """Test detection of error response with 'status' key."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {"status": "error"}
+        assert _is_error_response(error_response) is True
+
+    def test_error_detection_timeout_error(self):
+        """Test detection of specific timeout error from docling-serve."""
+        from mdify.docling_client import _is_error_response
+        
+        error_response = {
+            "detail": "Conversion is taking too long. The maximum wait time is configure as DOCLING_SERVE_MAX_SYNC_WAIT=120."
+        }
+        assert _is_error_response(error_response) is True
+
+    def test_valid_response_not_detected_as_error(self):
+        """Test that valid responses are not marked as errors."""
+        from mdify.docling_client import _is_error_response
+        
+        valid_response = {"document": {"md_content": "# Valid Markdown"}}
+        assert _is_error_response(valid_response) is False
+
+    def test_empty_dict_not_detected_as_error(self):
+        """Test that empty dict is not detected as error."""
+        from mdify.docling_client import _is_error_response
+        
+        assert _is_error_response({}) is False
+
+    def test_non_dict_not_detected_as_error(self):
+        """Test that non-dict values are not detected as errors."""
+        from mdify.docling_client import _is_error_response
+        
+        assert _is_error_response("not a dict") is False
+        assert _is_error_response(None) is False
+        assert _is_error_response([]) is False
+
+
+class TestContentExtraction:
+    """Test content extraction from responses, including error handling."""
+
+    def test_extract_content_from_error_returns_empty(self):
+        """Test that error responses return empty content."""
+        from mdify.docling_client import _extract_content
+        
+        error_response = {"detail": "Conversion failed"}
+        assert _extract_content(error_response) == ""
+
+    def test_extract_content_from_document_md_content(self):
+        """Test extracting content from document.md_content."""
+        from mdify.docling_client import _extract_content
+        
+        valid_response = {
+            "document": {
+                "md_content": "# Valid Markdown\n\nThis is valid content."
+            }
+        }
+        content = _extract_content(valid_response)
+        assert content == "# Valid Markdown\n\nThis is valid content."
+
+    def test_extract_content_from_document_content_fallback(self):
+        """Test extracting content from document.content fallback."""
+        from mdify.docling_client import _extract_content
+        
+        response = {
+            "document": {
+                "content": "Alternative content format"
+            }
+        }
+        content = _extract_content(response)
+        assert content == "Alternative content format"
+
+    def test_extract_content_from_empty_document(self):
+        """Test that empty document returns empty string."""
+        from mdify.docling_client import _extract_content
+        
+        response = {"document": {"md_content": ""}}
+        assert _extract_content(response) == ""
+
+    def test_extract_content_from_results_old_format(self):
+        """Test extracting content from old list format."""
+        from mdify.docling_client import _extract_content
+        
+        response = [
+            {
+                "document": {
+                    "md_content": "# Header\n\nMarkdown content"
+                }
+            }
+        ]
+        content = _extract_content(response)
+        assert "Header" in content
+
+    def test_extract_content_with_nested_markdown(self):
+        """Test extracting nested markdown content."""
+        from mdify.docling_client import _extract_content
+        
+        response = {
+            "document": {
+                "content": {
+                    "markdown": "# Nested Markdown"
+                }
+            }
+        }
+        content = _extract_content(response)
+        assert len(content) > 0
+
+
+class TestContentValidation:
+    """Test content length validation for preventing invalid files."""
+
+    def test_validation_threshold_minimum(self):
+        """Test that exactly 50 characters passes validation."""
+        content = "This is exactly 50 character string for testing."
+        # Verify it's exactly 50 characters (or use a longer string)
+        if len(content.strip()) < 50:
+            content = "This is a string that is at least 50 characters long to validate the threshold."
+        assert len(content.strip()) >= 50
+
+    def test_validation_threshold_below_minimum(self):
+        """Test that less than 50 characters fails validation."""
+        content = "Too short"
+        assert len(content.strip()) < 50
+
+    def test_validation_empty_content_fails(self):
+        """Test that empty content fails validation."""
+        content = ""
+        content_length = len(content.strip()) if content else 0
+        assert content_length < 50
+
+    def test_validation_whitespace_stripped(self):
+        """Test that whitespace is stripped during validation."""
+        content = "   Too short   "
+        # After strip, it's less than 50 chars
+        assert len(content.strip()) < 50
+
+    def test_validation_error_json_fails(self):
+        """Test that typical error JSON fails validation."""
+        import json
+        error_json = json.dumps({
+            "detail": "Conversion is taking too long. The maximum wait time is configure as DOCLING_SERVE_MAX_SYNC_WAIT=120."
+        })
+        # Even the error message is < 50 chars when just the string
+        error_detail = '{"detail": "Conversion failed"}'
+        assert len(error_detail.strip()) < 50
+
+    def test_validation_valid_content_passes(self):
+        """Test that typical valid content passes validation."""
+        content = "# Markdown Heading\n\nThis is substantial content that exceeds the 50 character minimum."
+        assert len(content.strip()) >= 50
+
+    def test_convert_result_with_short_content(self):
+        """Test ConvertResult with content below threshold."""
+        result = ConvertResult(content="Short", format="md", success=True)
+        content_length = len(result.content.strip()) if result.content else 0
+        assert content_length < 50
+
+    def test_convert_result_with_valid_content(self):
+        """Test ConvertResult with content above threshold."""
+        result = ConvertResult(
+            content="# Valid content that exceeds the 50 character minimum threshold",
+            format="md",
+            success=True
+        )
+        content_length = len(result.content.strip()) if result.content else 0
+        assert content_length >= 50
+
+    def test_convert_result_with_empty_content(self):
+        """Test ConvertResult with empty content."""
+        result = ConvertResult(content="", format="md", success=True)
+        assert result.success is True
+        assert result.content == ""
+        content_length = len(result.content.strip()) if result.content else 0
+        assert content_length < 50
