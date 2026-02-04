@@ -48,6 +48,25 @@ def _get_mime_type(file_path: Path) -> str:
     return mime_type or "application/octet-stream"
 
 
+def _is_error_response(result_data) -> bool:
+    """Check if response contains an error instead of content.
+    
+    Detects common API error response patterns.
+    
+    Args:
+        result_data: Response data to check
+        
+    Returns:
+        True if response appears to be an error
+    """
+    if not isinstance(result_data, dict):
+        return False
+    
+    # Check for common error keys at top level
+    error_keys = {"detail", "error", "message", "code", "status"}
+    return bool(error_keys & set(result_data.keys()))
+
+
 def _extract_content(result_data) -> str:
     """Extract content from API response, supporting both old and new formats.
 
