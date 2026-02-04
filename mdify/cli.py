@@ -1352,13 +1352,19 @@ def main_async_remote(args) -> int:
                                         print(f"  ↻ Conversion retry {conversion_attempt - 1} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
                                         await asyncio.sleep(backoff_delay)
                                     
-                                    conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
+                                    conversion_output, stderr_output, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
                                     
                                     if conv_code == 0:
                                         conversion_success = True
                                         break
                                     else:
                                         # Non-zero exit code - fail without retry for non-connection errors
+                                        if not args.quiet:
+                                            print(f"  ✗ curl exited with code {conv_code}", file=sys.stderr)
+                                            if conversion_output:
+                                                print(f"  Output: {conversion_output[:500]}", file=sys.stderr)
+                                            if stderr_output:
+                                                print(f"  Error: {stderr_output[:500]}", file=sys.stderr)
                                         break
                                 except Exception as conv_exc:
                                     is_conn_err = is_connection_error(conv_exc)
