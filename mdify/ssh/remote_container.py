@@ -63,7 +63,7 @@ class RemoteContainer(DoclingContainer):
         try:
             # Find containers using this port
             # Using docker inspect with port filter
-            cmd = f"{self.runtime} ps -a --filter 'publish={self.port}' --format '{{{{.ID}}}}'"
+            cmd = f"{self.runtime} ps -a --filter 'publish={int(self.port)}' --format '{{{{.ID}}}}'"
             stdout, stderr, code = await self.ssh_client.run_command(cmd, timeout=10)
             
             if code == 0 and stdout.strip():

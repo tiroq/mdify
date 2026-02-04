@@ -8,10 +8,10 @@ is lightweight and has no ML dependencies.
 """
 
 import argparse
-import asyncio
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -273,14 +273,14 @@ def check_for_update(force: bool = False) -> None:
 
     _update_last_check_time()
 
+    from mdify.formatting import Colorizer
+    
     if not _compare_versions(__version__, remote_version):
         if force:
-            from mdify.formatting import Colorizer
             color = Colorizer(sys.stdout)
             print(color.success(f"✓ mdify is up to date (v{__version__})"))
         return
 
-    from mdify.formatting import Colorizer
     color = Colorizer(sys.stdout)
     print(f"\n{color.bright_yellow('=' * 60)}")
     print(color.bold_yellow("🎉 A new version of mdify-cli is available!"))
@@ -1175,7 +1175,6 @@ def main_async_remote(args) -> int:
             input_path = Path(args.input)
             if not input_path.exists():
                 await ssh_client.disconnect()
-                color = Colorizer(sys.stderr)
                 print(f"{color.error('✗ Error:')} Input file or directory not found: {args.input}", file=sys.stderr)
                 return 1
             
@@ -1185,7 +1184,6 @@ def main_async_remote(args) -> int:
             
             if not files_to_convert:
                 await ssh_client.disconnect()
-                color = Colorizer(sys.stderr)
                 print(f"{color.error('✗ Error:')} No supported files found in {args.input}", file=sys.stderr)
                 print(f"  {color.dim_white(f'Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}')} ", file=sys.stderr)
                 return 1
@@ -1268,7 +1266,7 @@ def main_async_remote(args) -> int:
                         )
                     
                     attempt = 0
-                    while True:
+                    while attempt <= 1:  # Max 2 attempts (0 and 1)
                         try:
                             # Upload file
                             remote_file_path = f"{work_dir}/{input_file.name}"
@@ -1322,7 +1320,7 @@ def main_async_remote(args) -> int:
                                 f"curl -X POST "
                                 f"--connect-timeout 60 "
                                 f"--max-time {remote_conversion_timeout} "
-                                f"-F 'files=@{remote_file_path}' "
+                                f"-F 'files=@{shlex.quote(remote_file_path)}' "
                                 f"-F 'to_formats=md' "
                                 f"-F 'do_ocr=true' "
                             )
@@ -1335,11 +1333,12 @@ def main_async_remote(args) -> int:
                             conversion_success = False
                             conversion_output = None
                             while conversion_attempt < 3 and not conversion_success:
+                                conversion_attempt += 1
                                 try:
-                                    if conversion_attempt > 0 and not args.quiet:
-                                        # Exponential backoff: 2s, 4s, 8s
-                                        backoff_delay = 2 ** conversion_attempt
-                                        print(f"  ↻ Conversion retry {conversion_attempt} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
+                                    if conversion_attempt > 1 and not args.quiet:
+                                        # Exponential backoff: 2s, 4s
+                                        backoff_delay = 2 ** (conversion_attempt - 1)
+                                        print(f"  ↻ Conversion retry {conversion_attempt - 1} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
                                         await asyncio.sleep(backoff_delay)
                                     
                                     conversion_output, _, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
@@ -1352,8 +1351,7 @@ def main_async_remote(args) -> int:
                                         break
                                 except Exception as conv_exc:
                                     is_conn_err = is_connection_error(conv_exc)
-                                    if is_conn_err and conversion_attempt < 2:
-                                        conversion_attempt += 1
+                                    if is_conn_err and conversion_attempt < 3:
                                         if not args.quiet:
                                             # Exponential backoff: 5s, 10s
                                             backoff_delay = 5 * conversion_attempt
@@ -1364,6 +1362,7 @@ def main_async_remote(args) -> int:
                                         try:
                                             await ssh_client.disconnect()
                                         except Exception:
+                                            # Best-effort disconnect; ignore errors (e.g., already closed) before reconnecting
                                             pass
                                         
                                         # Reconnect with retry
@@ -1375,16 +1374,13 @@ def main_async_remote(args) -> int:
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
-                                        if not args.quiet:
-                                            print(f"  [DEBUG] Breaking loop: not conn_err or exhausted retries", file=sys.stderr)
-                                        if conversion_attempt >= 2 and is_conn_err:
+                                        if conversion_attempt >= 3 and is_conn_err:
                                             if not args.quiet:
                                                 print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
                             
                             if not conversion_success:
-                                color_error = Colorizer(sys.stderr)
-                                print(f"  {color_error.error('✗ Failed:')} Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
+                                print(f"  {color.error('✗ Failed:')} Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
                                 failed += 1
                                 break
                             
@@ -1427,6 +1423,7 @@ def main_async_remote(args) -> int:
                                 if not args.quiet:
                                     print(f"  {color.cyan('Writing')} {content_size_kb:.1f}KB markdown via SFTP...", file=sys.stderr)
                                 
+                                temp_path = None
                                 try:
                                     # Write to temporary local file
                                     with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as temp_file:
@@ -1441,12 +1438,6 @@ def main_async_remote(args) -> int:
                                         compress=False,
                                     )
                                     
-                                    # Cleanup temp file
-                                    try:
-                                        os.unlink(temp_path)
-                                    except Exception:
-                                        pass
-                                    
                                     if not args.quiet:
                                         print(f"  {color.green('✓')} Markdown written", file=sys.stderr)
                                 except Exception as write_exc:
@@ -1454,6 +1445,14 @@ def main_async_remote(args) -> int:
                                         print(f"  ✗ Failed to write markdown: {write_exc}", file=sys.stderr)
                                     failed += 1
                                     break
+                                finally:
+                                    # Cleanup temp file
+                                    if temp_path:
+                                        try:
+                                            os.unlink(temp_path)
+                                        except Exception as cleanup_exc:
+                                            if DEBUG:
+                                                print(f"  ! Failed to remove temporary file {temp_path}: {cleanup_exc}", file=sys.stderr)
                                 
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 print(f"  ✗ Failed to parse conversion response", file=sys.stderr)
@@ -1481,7 +1480,7 @@ def main_async_remote(args) -> int:
                             successful += 1
                             
                             # Cleanup remote files
-                            await ssh_client.run_command(f"rm -f {remote_file_path} {remote_output_path}")
+                            await ssh_client.run_command(f"rm -f {shlex.quote(remote_file_path)} {shlex.quote(remote_output_path)}")
                             
                             break
                         except Exception as e:
@@ -1492,12 +1491,12 @@ def main_async_remote(args) -> int:
                                 try:
                                     await ssh_client.disconnect()
                                 except Exception:
+                                    # Best-effort disconnect; ignore errors since we'll immediately reconnect.
                                     pass
                                 await ssh_client.connect()
                                 continue
                             
-                            color_err = Colorizer(sys.stderr)
-                            print(f"  {color_err.error('✗ Failed:')} {str(e)}", file=sys.stderr)
+                            print(f"  {color.error('✗ Failed:')} {str(e)}", file=sys.stderr)
                             if DEBUG:
                                 import traceback
                                 traceback.print_exc(file=sys.stderr)
@@ -1519,7 +1518,7 @@ def main_async_remote(args) -> int:
                 
                 # Cleanup remote work directory
                 try:
-                    await ssh_client.run_command(f"rm -rf {work_dir}")
+                    await ssh_client.run_command(f"rm -rf {shlex.quote(work_dir)}")
                     if not args.quiet:
                         print(color.green(f"✓ Cleaned up remote directory"), file=sys.stderr)
                 except Exception as e:
@@ -1594,8 +1593,11 @@ def main_async_remote(args) -> int:
 def main() -> int:
     """Main entry point for the CLI."""
     from mdify.formatting import Colorizer
-    color = Colorizer(sys.stderr)
-    print(color.bold_cyan(f"📄 mdify v{__version__}"), file=sys.stderr)
+    
+    color_stderr = Colorizer(sys.stderr)
+    color_stdout = Colorizer(sys.stdout)
+    
+    print(color_stderr.bold_cyan(f"📄 mdify v{__version__}"), file=sys.stderr)
     args = parse_args()
 
     # Handle --check-update flag
@@ -1743,41 +1745,34 @@ def main() -> int:
 
     # Validate input
     if not input_path.exists():
-        color = Colorizer(sys.stderr)
-        print(f"{color.error('✗ Error:')} Input path does not exist: {input_path}", file=sys.stderr)
+        print(f"{color_stderr.error('✗ Error:')} Input path does not exist: {input_path}", file=sys.stderr)
         return 1
 
     # Get files to convert
     try:
         files_to_convert = get_files_to_convert(input_path, args.glob, args.recursive)
     except Exception as e:
-        color = Colorizer(sys.stderr)
-        print(f"{color.error('✗ Error:')} {e}", file=sys.stderr)
+        print(f"{color_stderr.error('✗ Error:')} {e}", file=sys.stderr)
         return 1
 
     if not files_to_convert:
-        color = Colorizer(sys.stderr)
-        print(f"{color.warning('⚠ Warning:')} No files found to convert in: {input_path}", file=sys.stderr)
+        print(f"{color_stderr.warning('⚠ Warning:')} No files found to convert in: {input_path}", file=sys.stderr)
         return 1
 
     total_files = len(files_to_convert)
     total_size = sum(f.stat().st_size for f in files_to_convert)
 
     if not args.quiet:
-        from mdify.formatting import Colorizer
-        color_info = Colorizer(sys.stdout)
-        print(f"{color_info.bright_cyan('📦 Found')} {color_info.bold(str(total_files))} {color_info.bright_cyan('file(s)')} {color_info.dim_white(f'({format_size(total_size)})')}")
-        print(f"{color_info.cyan('📁 Source:')} {color_info.bright_white(str(input_path.resolve()))}")
-        print(f"{color_info.cyan('💾 Output:')} {color_info.bright_white(str(output_dir.resolve()))}")
-        print(f"{color_info.cyan('🐳 Runtime:')} {color_info.bright_white(runtime)}")
-        print(f"{color_info.cyan('🖼️  Image:')} {color_info.dim_white(image)}")
+        print(f"{color_stdout.bright_cyan('📦 Found')} {color_stdout.bold(str(total_files))} {color_stdout.bright_cyan('file(s)')} {color_stdout.dim_white(f'({format_size(total_size)})')}")
+        print(f"{color_stdout.cyan('📁 Source:')} {color_stdout.bright_white(str(input_path.resolve()))}")
+        print(f"{color_stdout.cyan('💾 Output:')} {color_stdout.bright_white(str(output_dir.resolve()))}")
+        print(f"{color_stdout.cyan('🐳 Runtime:')} {color_stdout.bright_white(runtime)}")
+        print(f"{color_stdout.cyan('🖼️  Image:')} {color_stdout.dim_white(image)}")
         print()
 
     if args.mask:
-        from mdify.formatting import Colorizer
-        color_warn = Colorizer(sys.stderr)
         print(
-            color_warn.warning("⚠ --mask is not supported with docling-serve and will be ignored"),
+            color_stderr.warning("⚠ --mask is not supported with docling-serve and will be ignored"),
             file=sys.stderr,
         )
 
@@ -1794,9 +1789,7 @@ def main() -> int:
 
     try:
         if not args.quiet:
-            from mdify.formatting import Colorizer
-            color_start = Colorizer(sys.stdout)
-            print(f"{color_start.bright_cyan('▶️  Starting')} {color_start.bright_white('docling-serve')} {color_start.bright_cyan('container')}...\n")
+            print(f"{color_stdout.bright_cyan('▶️  Starting')} {color_stdout.bright_white('docling-serve')} {color_stdout.bright_cyan('container')}...\n")
 
         # Apply resource profile
         profile = RESOURCE_PROFILES[args.profile]
@@ -2035,30 +2028,26 @@ def main() -> int:
 
         # Print summary
         if not args.quiet:
-            from mdify.formatting import Colorizer
-            color_out = Colorizer(sys.stdout)
             print()
-            print(color_out.cyan("=" * 60))
-            print(color_out.bold_cyan("📊 Local Conversion Summary"))
-            print(color_out.cyan("=" * 60))
-            print(f"  {color_out.cyan('Total files:')} {color_out.bold(str(total_files))}")
+            print(color_stdout.cyan("=" * 60))
+            print(color_stdout.bold_cyan("📊 Local Conversion Summary"))
+            print(color_stdout.cyan("=" * 60))
+            print(f"  {color_stdout.cyan('Total files:')} {color_stdout.bold(str(total_files))}")
             if success_count > 0:
-                print(f"  {color_out.green('✓ Successful:')} {color_out.bold_green(str(success_count))}")
+                print(f"  {color_stdout.green('✓ Successful:')} {color_stdout.bold_green(str(success_count))}")
             if skipped_count > 0:
-                print(f"  {color_out.yellow('⊘ Skipped:')} {color_out.bold_yellow(str(skipped_count))}")
+                print(f"  {color_stdout.yellow('⊘ Skipped:')} {color_stdout.bold_yellow(str(skipped_count))}")
             if failed_count > 0:
-                print(f"  {color_out.red('✗ Failed:')} {color_out.bold_red(str(failed_count))}")
-            print(f"  {color_out.cyan('Total time:')} {color_out.bright_cyan(format_duration(total_elapsed))}")
-            print(color_out.cyan("=" * 60))
+                print(f"  {color_stdout.red('✗ Failed:')} {color_stdout.bold_red(str(failed_count))}")
+            print(f"  {color_stdout.cyan('Total time:')} {color_stdout.bright_cyan(format_duration(total_elapsed))}")
+            print(color_stdout.cyan("=" * 60))
 
     except KeyboardInterrupt:
         if not args.quiet:
-            from mdify.formatting import Colorizer
-            color_out = Colorizer(sys.stdout)
-            print(f"\n\n{color_out.warning('⚠ Interrupted by user. Container stopped.')}")
+            print(f"\n\n{color_stdout.warning('⚠ Interrupted by user. Container stopped.')}")
             if success_count > 0 or skipped_count > 0 or failed_count > 0:
                 print(
-                    f"{color_out.dim_white('Partial progress:')} {color_out.green(str(success_count))} successful, {color_out.red(str(failed_count))} failed, {color_out.yellow(str(skipped_count))} skipped"
+                    f"{color_stdout.dim_white('Partial progress:')} {color_stdout.green(str(success_count))} successful, {color_stdout.red(str(failed_count))} failed, {color_stdout.yellow(str(skipped_count))} skipped"
                 )
         return 130
 
