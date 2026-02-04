@@ -1096,19 +1096,29 @@ def main_async_remote(args) -> int:
             
             # Start with minimal defaults if no config loaded
             if ssh_config is None:
-                ssh_config = SSHConfig(host=args.remote_host, port=22, username=None)
+                ssh_config = SSHConfig(host=args.remote_host, port=22, username="")
             
-            # Apply CLI arguments with highest precedence
-            cli_config = SSHConfig(
-                host=args.remote_host,
-                port=args.remote_port,
-                username=args.remote_user,
-                key_file=args.remote_key,
-                key_passphrase=args.remote_key_passphrase,
-                timeout=args.remote_timeout,
-                work_dir=args.remote_work_dir,
-                container_runtime=args.remote_runtime,
-            )
+            # Apply CLI arguments with highest precedence (only pass non-None values)
+            cli_config_kwargs = {
+                "host": args.remote_host,
+                "source": "cli",
+            }
+            if args.remote_port is not None:
+                cli_config_kwargs["port"] = args.remote_port
+            if args.remote_user:
+                cli_config_kwargs["username"] = args.remote_user
+            if args.remote_key:
+                cli_config_kwargs["key_file"] = args.remote_key
+            if args.remote_key_passphrase:
+                cli_config_kwargs["key_passphrase"] = args.remote_key_passphrase
+            if args.remote_timeout is not None:
+                cli_config_kwargs["timeout"] = args.remote_timeout
+            if args.remote_work_dir:
+                cli_config_kwargs["work_dir"] = args.remote_work_dir
+            if args.remote_runtime:
+                cli_config_kwargs["container_runtime"] = args.remote_runtime
+            
+            cli_config = SSHConfig(**cli_config_kwargs)
             ssh_config = ssh_config.merge(cli_config)
             
             # Create SSH client
