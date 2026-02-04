@@ -1060,11 +1060,11 @@ def main_async_remote(args) -> int:
         color = Colorizer(sys.stderr)
         
         # Resolve timeout value: CLI > env > default 1200
-        timeout = args.timeout or int(os.environ.get("MDIFY_TIMEOUT", 1200))
+        timeout = args.timeout if args.timeout is not None else int(os.environ.get("MDIFY_TIMEOUT", 1200))
         
         # For remote operations, extend timeout significantly for large PDF processing
         # Remote conversions include network latency, file upload/download, and OCR processing
-        remote_conversion_timeout = max(timeout, 3600)  # At least 1 hour for remote conversion
+        remote_conversion_timeout = max(timeout or 1200, 3600)  # At least 1 hour for remote conversion
         
         # Build SSH config from CLI arguments and SSH config files
         try:
@@ -1583,9 +1583,9 @@ def main_async_remote(args) -> int:
             return 1
         except Exception as e:
             print(f"Error: Unexpected error during remote execution: {e}", file=sys.stderr)
-            if DEBUG:
-                import traceback
-                traceback.print_exc(file=sys.stderr)
+            # Always print traceback for unexpected errors to help with debugging
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             return 1
     
     # Run async main
