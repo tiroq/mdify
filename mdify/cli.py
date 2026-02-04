@@ -1400,6 +1400,23 @@ def main_async_remote(args) -> int:
                                 response_data = json.loads(conversion_output)
                                 color_err = Colorizer(sys.stderr)
                                 
+                                # Debug: Print JSON schema structure
+                                if DEBUG:
+                                    def get_schema(obj, depth=0, max_depth=3):
+                                        """Get JSON schema structure."""
+                                        if depth > max_depth:
+                                            return "..."
+                                        if isinstance(obj, dict):
+                                            return "{" + ", ".join(f"{k}: {get_schema(v, depth+1)}" for k, v in list(obj.items())[:5]) + ("..." if len(obj) > 5 else "") + "}"
+                                        elif isinstance(obj, list):
+                                            return "[" + (get_schema(obj[0], depth+1) if obj else "") + ("..." if len(obj) > 1 else "") + "]"
+                                        elif isinstance(obj, str):
+                                            return f"str({len(obj)} chars)"
+                                        else:
+                                            return type(obj).__name__
+                                    schema = get_schema(response_data)
+                                    print(f"  Response schema: {schema}", file=sys.stderr)
+                                
                                 # Check if response is an error response
                                 if _is_error_response(response_data):
                                     error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
@@ -1463,8 +1480,10 @@ def main_async_remote(args) -> int:
                                 
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 print(f"  ✗ Failed to parse conversion response", file=sys.stderr)
-                                if DEBUG:
-                                    print(f"  Response: {conversion_output[:500]}", file=sys.stderr)
+                                if DEBUG and conversion_output:
+                                    # Only print a snippet of the response for debugging
+                                    response_snippet = conversion_output[:300] + ("..." if len(conversion_output) > 300 else "")
+                                    print(f"  Response snippet: {response_snippet}", file=sys.stderr)
                                 failed += 1
                                 break
                             
