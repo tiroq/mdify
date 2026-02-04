@@ -1387,35 +1387,52 @@ def main_async_remote(args) -> int:
                             # Parse JSON response to extract markdown content
                             try:
                                 response_data = json.loads(conversion_output)
+                                color_err = Colorizer(sys.stderr)
+                                
+                                # Check if response is an error (has error keys)
+                                error_keys = {"detail", "error", "message", "code", "status"}
+                                response_keys = set(response_data.keys()) if isinstance(response_data, dict) else set()
+                                if error_keys & response_keys:
+                                    # Error response - extract and display error
+                                    error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
+                                    print(f"  {color_err.error('✗ Failed:')} {error_detail}", file=sys.stderr)
+                                    if "DOCLING_SERVE_MAX_SYNC_WAIT" in str(error_detail):
+                                        timeout_val = args.remote_timeout or 3600
+                                        print(f"  {color_err.info('ℹ Tip:')} Increase timeout with --remote-timeout (current: {timeout_val}s)", file=sys.stderr)
+                                    failed += 1
+                                    break
                                 
                                 # Extract content from response structure
                                 # Actual format: {"document": {"md_content": "..."}, "status": "success"}
+                                markdown_content = None
                                 if "document" in response_data:
                                     document = response_data["document"]
                                     if "md_content" in document and document["md_content"]:
                                         markdown_content = document["md_content"]
                                     elif "text_content" in document and document["text_content"]:
                                         markdown_content = document["text_content"]
-                                    else:
-                                        # Fallback - use whole document
-                                        markdown_content = json.dumps(document, indent=2)
-                                else:
+                                elif "results" in response_data and response_data["results"]:
                                     # Legacy format fallback
-                                    if "results" in response_data and response_data["results"]:
-                                        result = response_data["results"][0]
-                                        if "content" in result:
-                                            content = result["content"]
-                                            if isinstance(content, dict) and "markdown" in content:
-                                                markdown_content = content["markdown"]
-                                            elif isinstance(content, str):
-                                                markdown_content = content
-                                            else:
-                                                markdown_content = str(content)
+                                    result = response_data["results"][0]
+                                    if "content" in result:
+                                        content = result["content"]
+                                        if isinstance(content, dict) and "markdown" in content:
+                                            markdown_content = content["markdown"]
+                                        elif isinstance(content, str):
+                                            markdown_content = content
                                         else:
-                                            markdown_content = str(result)
-                                    else:
-                                        # Ultimate fallback
-                                        markdown_content = conversion_output
+                                            markdown_content = str(content)
+                                
+                                # Validate content exists and is not empty/too short
+                                if not markdown_content or len(markdown_content.strip()) < 50:
+                                    print(f"  {color_err.error('✗ Failed:')} Empty or invalid conversion result", file=sys.stderr)
+                                    if args.remote_timeout and args.remote_timeout < 300:
+                                        print(
+                                            f"  {color_err.info('ℹ Tip:')} Timeout is only {args.remote_timeout}s. Consider increasing with --remote-timeout (default: 3600s)",
+                                            file=sys.stderr,
+                                        )
+                                    failed += 1
+                                    break
                                 
                                 # Write markdown content to local temp file first, then upload via SFTP
                                 # (Piping large content through SSH here-documents can crash the connection)
@@ -1864,13 +1881,33 @@ def main() -> int:
                         spinner.stop()
 
                     if result.success:
-                        # Write result to output file
-                        output_file.write_text(result.content)
-                        success_count += 1
-                        if not args.quiet:
-                            print(
-                                f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})"
-                            )
+                        # Validate content is not empty and not an error response
+                        content_length = len(result.content.strip()) if result.content else 0
+                        if content_length < 50:
+                            # Too short - likely an error or empty document
+                            failed_count += 1
+                            if not args.quiet:
+                                print(
+                                    f"{progress} {input_file.name} ✗ ({format_duration(elapsed)})"
+                                )
+                                error_msg = "Empty or invalid conversion result"
+                                if result.content:
+                                    error_msg += f" ({len(result.content)} bytes)"
+                                print(f"    Error: {error_msg}", file=sys.stderr)
+                                if args.timeout and args.timeout < 300:
+                                    color_out = Colorizer(sys.stderr)
+                                    print(
+                                        f"    {color_out.info('ℹ Tip:')} Timeout is only {args.timeout}s. Consider increasing with --timeout (default: 1200s)",
+                                        file=sys.stderr,
+                                    )
+                        else:
+                            # Write result to output file
+                            output_file.write_text(result.content)
+                            success_count += 1
+                            if not args.quiet:
+                                print(
+                                    f"{progress} {input_file.name} ✓ ({format_duration(elapsed)})"
+                                )
                     else:
                         failed_count += 1
                         error_msg = result.error or "Unknown error"
