@@ -1056,6 +1056,7 @@ def main_async_remote(args) -> int:
     async def async_main() -> int:
         """Async implementation of remote conversion."""
         from mdify.formatting import Colorizer
+        from mdify.docling_client import _is_error_response, _extract_content
 
         color = Colorizer(sys.stderr)
         
@@ -1399,11 +1400,8 @@ def main_async_remote(args) -> int:
                                 response_data = json.loads(conversion_output)
                                 color_err = Colorizer(sys.stderr)
                                 
-                                # Check if response is an error (has error keys)
-                                error_keys = {"detail", "error", "message", "code", "status"}
-                                response_keys = set(response_data.keys()) if isinstance(response_data, dict) else set()
-                                if error_keys & response_keys:
-                                    # Error response - extract and display error
+                                # Check if response is an error response
+                                if _is_error_response(response_data):
                                     error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
                                     print(f"  {color_err.error('✗ Failed:')} {error_detail}", file=sys.stderr)
                                     if "DOCLING_SERVE_MAX_SYNC_WAIT" in str(error_detail):
@@ -1412,26 +1410,8 @@ def main_async_remote(args) -> int:
                                     failed += 1
                                     break
                                 
-                                # Extract content from response structure
-                                # Actual format: {"document": {"md_content": "..."}, "status": "success"}
-                                markdown_content = None
-                                if "document" in response_data:
-                                    document = response_data["document"]
-                                    if "md_content" in document and document["md_content"]:
-                                        markdown_content = document["md_content"]
-                                    elif "text_content" in document and document["text_content"]:
-                                        markdown_content = document["text_content"]
-                                elif "results" in response_data and response_data["results"]:
-                                    # Legacy format fallback
-                                    result = response_data["results"][0]
-                                    if "content" in result:
-                                        content = result["content"]
-                                        if isinstance(content, dict) and "markdown" in content:
-                                            markdown_content = content["markdown"]
-                                        elif isinstance(content, str):
-                                            markdown_content = content
-                                        else:
-                                            markdown_content = str(content)
+                                # Extract content from response using proper extraction function
+                                markdown_content = _extract_content(response_data)
                                 
                                 # Validate content exists and is not empty/too short
                                 if not markdown_content or len(markdown_content.strip()) < 50:
