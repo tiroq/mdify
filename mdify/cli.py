@@ -1331,12 +1331,12 @@ def main_async_remote(args) -> int:
                                 f"curl -X POST "
                                 f"--connect-timeout 60 "
                                 f"--max-time {remote_conversion_timeout} "
-                                f"-F 'files=@{shlex.quote(remote_file_path)}' "
-                                f"-F 'to_formats=md' "
-                                f"-F 'do_ocr=true' "
+                                f"-F files=@{shlex.quote(remote_file_path)} "
+                                f"-F to_formats=md "
+                                f"-F do_ocr=true "
                             )
                             if args.mask:
-                                convert_cmd += f"-F 'mask=true' "
+                                convert_cmd += f"-F mask=true "
                             convert_cmd += f"http://localhost:{args.port}/v1/convert/file"
                             
                             # Retry conversion command with exponential backoff
