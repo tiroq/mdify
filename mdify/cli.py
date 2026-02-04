@@ -1336,7 +1336,7 @@ def main_async_remote(args) -> int:
                                 conversion_attempt += 1
                                 try:
                                     if conversion_attempt > 1 and not args.quiet:
-                                        # Exponential backoff: 2s, 4s, 8s
+                                        # Exponential backoff: 2s, 4s
                                         backoff_delay = 2 ** (conversion_attempt - 1)
                                         print(f"  ↻ Conversion retry {conversion_attempt - 1} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
                                         await asyncio.sleep(backoff_delay)
