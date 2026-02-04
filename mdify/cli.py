@@ -1397,8 +1397,8 @@ def main_async_remote(args) -> int:
                                     error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
                                     print(f"  {color_err.error('✗ Failed:')} {error_detail}", file=sys.stderr)
                                     if "DOCLING_SERVE_MAX_SYNC_WAIT" in str(error_detail):
-                                        timeout_val = args.remote_timeout or 3600
-                                        print(f"  {color_err.info('ℹ Tip:')} Increase timeout with --remote-timeout (current: {timeout_val}s)", file=sys.stderr)
+                                        timeout_val = args.timeout or 3600
+                                        print(f"  {color_err.info('ℹ Tip:')} Increase timeout with --timeout (current: {timeout_val}s)", file=sys.stderr)
                                     failed += 1
                                     break
                                 
