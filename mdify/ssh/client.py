@@ -44,7 +44,7 @@ class AsyncSSHClient:
                 # Prepare connection parameters - only include non-None values
                 connect_kwargs = {
                     "port": self.config.port,
-                    "connect_timeout": self.config.timeout,
+                    "connect_timeout": self.config.timeout or 30,
                     "known_hosts": None,  # Skip host key verification for now
                 }
 
@@ -165,7 +165,7 @@ class AsyncSSHClient:
             )
         
         try:
-            timeout_val = timeout or self.config.timeout
+            timeout_val = timeout or self.config.timeout or 30
             
             result = await asyncio.wait_for(
                 self.connection.run(command, check=False),
