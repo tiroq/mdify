@@ -275,17 +275,20 @@ def check_for_update(force: bool = False) -> None:
 
     if not _compare_versions(__version__, remote_version):
         if force:
-            print(f"mdify is up to date (version {__version__})")
+            from mdify.formatting import Colorizer
+            color = Colorizer(sys.stdout)
+            print(color.success(f"✓ mdify is up to date (v{__version__})"))
         return
 
-    print(f"\n{'=' * 50}")
-    print(f"A new version of mdify-cli is available!")
-    print(f"  Current version: {__version__}")
-    print(f"  Latest version:  {remote_version}")
-    print(f"{'=' * 50}")
-    print(f"\nTo upgrade, run:")
-    print(f"  pipx upgrade mdify-cli")
-    print(f"  # or: pip install --upgrade mdify-cli\n")
+    from mdify.formatting import Colorizer
+    color = Colorizer(sys.stdout)
+    print(f"\n{color.bright_yellow('=' * 60)}")
+    print(color.bold_yellow("🎉 A new version of mdify-cli is available!"))
+    print(f"{color.dim_white('  Current:')} {__version__} → {color.bright_green(remote_version)}")
+    print(f"{color.bright_yellow('=' * 60)}")
+    print(f"\n{color.cyan('To upgrade, run:')}")
+    print(f"  {color.bold('pipx upgrade mdify-cli')}")
+    print(f"  {color.dim_white('# or: pip install --upgrade mdify-cli')}\n")
 
 
 # =============================================================================
@@ -1113,57 +1116,57 @@ def main_async_remote(args) -> int:
             
             # Connect to remote server
             if not args.quiet:
-                print(color.cyan(f"Connecting to {ssh_config.host}:{ssh_config.port}..."), file=sys.stderr)
+                print(color.bright_cyan(f"🔗 Connecting to {color.bold(ssh_config.host)}:{ssh_config.port}..."), file=sys.stderr)
             
             await ssh_client.connect()
             
             if not args.quiet:
-                print(color.green(f"✓ Connected to {ssh_config.host}"), file=sys.stderr)
+                print(color.success(f"✓ Connected to {ssh_config.host}"), file=sys.stderr)
             
             # Validate remote resources if not skipped
             if not args.remote_skip_validation:
                 if not args.quiet:
-                    print(color.cyan("Validating remote resources..."), file=sys.stderr)
+                    print(color.cyan("🔍 Validating remote resources..."), file=sys.stderr)
                 
                 validation_result = await ssh_client.validate_remote_resources()
                 
                 if not validation_result.get("can_connect"):
                     await ssh_client.disconnect()
-                    print("Error: Cannot connect to remote server", file=sys.stderr)
+                    print(color.error("✗ Cannot connect to remote server"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("work_dir_writable"):
                     await ssh_client.disconnect()
-                    print(f"Error: Work directory not writable: {ssh_config.work_dir}", file=sys.stderr)
+                    print(color.error(f"✗ Work directory not writable: {ssh_config.work_dir}"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("container_runtime_available"):
                     await ssh_client.disconnect()
                     runtime_str = ssh_config.container_runtime or "docker/podman"
-                    print(f"Error: Container runtime not available: {runtime_str}", file=sys.stderr)
+                    print(color.error(f"✗ Container runtime not available: {runtime_str}"), file=sys.stderr)
                     return 1
                 
                 if not validation_result.get("disk_space_min_5gb"):
-                    print(f"Warning: Less than 5GB available on remote", file=sys.stderr)
+                    print(color.warning(f"⚠ Less than 5GB available on remote"), file=sys.stderr)
                     if not args.yes and sys.stdin.isatty():
                         if not confirm_proceed("Continue anyway?"):
                             await ssh_client.disconnect()
                             return 130
                 
                 if not validation_result.get("memory_min_2gb"):
-                    print(f"Warning: Less than 2GB available memory on remote", file=sys.stderr)
+                    print(color.warning(f"⚠ Less than 2GB available memory on remote"), file=sys.stderr)
                     if not args.yes and sys.stdin.isatty():
                         if not confirm_proceed("Continue anyway?"):
                             await ssh_client.disconnect()
                             return 130
                 
                 if not args.quiet:
-                    print(color.green("✓ All remote resources validated"), file=sys.stderr)
+                    print(color.success("✓ All remote resources validated"), file=sys.stderr)
             
             # If --remote-validate-only, exit here
             if args.remote_validate_only:
                 await ssh_client.disconnect()
-                print("Remote validation successful", file=sys.stderr)
+                print(color.success("✓ Remote validation successful"), file=sys.stderr)
                 return 0
             
             # Phase 2.4.2: File upload, remote conversion, and download
@@ -1524,13 +1527,21 @@ def main_async_remote(args) -> int:
             
             # Print summary
             print(color.cyan(f"\n{'='*60}"), file=sys.stderr)
-            print(color.cyan(f"Remote conversion complete:"), file=sys.stderr)
-            print(color.green(f"  Successful: {successful}"), file=sys.stderr)
+            print(color.bold_cyan("📊 Remote Conversion Summary"), file=sys.stderr)
+            print(color.cyan(f"{'='*60}"), file=sys.stderr)
+            
+            # Format summary with emojis and colors
+            total = len(files_to_convert)
+            success_pct = f" ({successful}/{total})" if total > 0 else ""
+            failed_pct = f" ({failed}/{total})" if total > 0 else ""
+            skipped_pct = f" ({total - successful - failed}/{total})" if total > 0 else ""
+            
+            print(f"  {color.green('✓ Successful:')} {color.bold_green(str(successful))}{success_pct}", file=sys.stderr)
             if failed > 0:
-                print(color.yellow(f"  Failed:     {failed}"), file=sys.stderr)
-            else:
-                print(f"  Failed:     {failed}", file=sys.stderr)
-            print(f"  Total:      {len(files_to_convert)}", file=sys.stderr)
+                print(f"  {color.red('✗ Failed:')} {color.bold_red(str(failed))}{failed_pct}", file=sys.stderr)
+            if (total - successful - failed) > 0:
+                print(f"  {color.yellow('⊘ Skipped:')} {color.bold_yellow(str(total - successful - failed))}{skipped_pct}", file=sys.stderr)
+            print(f"  {color.cyan('Total:')} {color.bold(str(total))}", file=sys.stderr)
             print(color.cyan(f"{'='*60}"), file=sys.stderr)
             
             return 0 if failed == 0 else 1
@@ -1578,7 +1589,9 @@ def main_async_remote(args) -> int:
 
 def main() -> int:
     """Main entry point for the CLI."""
-    print(f"mdify v{__version__}", file=sys.stderr)
+    from mdify.formatting import Colorizer
+    color = Colorizer(sys.stderr)
+    print(color.bold_cyan(f"📄 mdify v{__version__}"), file=sys.stderr)
     args = parse_args()
 
     # Handle --check-update flag
@@ -1744,16 +1757,20 @@ def main() -> int:
     total_size = sum(f.stat().st_size for f in files_to_convert)
 
     if not args.quiet:
-        print(f"Found {total_files} file(s) to convert ({format_size(total_size)})")
-        print(f"Source: {input_path.resolve()}")
-        print(f"Output: {output_dir.resolve()}")
-        print(f"Using runtime: {runtime}")
-        print(f"Using image: {image}")
+        from mdify.formatting import Colorizer
+        color_info = Colorizer(sys.stdout)
+        print(f"{color_info.bright_cyan('📦 Found')} {color_info.bold(str(total_files))} {color_info.bright_cyan('file(s)')} {color_info.dim_white(f'({format_size(total_size)})')}")
+        print(f"{color_info.cyan('📁 Source:')} {color_info.bright_white(str(input_path.resolve()))}")
+        print(f"{color_info.cyan('💾 Output:')} {color_info.bright_white(str(output_dir.resolve()))}")
+        print(f"{color_info.cyan('🐳 Runtime:')} {color_info.bright_white(runtime)}")
+        print(f"{color_info.cyan('🖼️  Image:')} {color_info.dim_white(image)}")
         print()
 
     if args.mask:
+        from mdify.formatting import Colorizer
+        color_warn = Colorizer(sys.stderr)
         print(
-            "Warning: --mask is not supported with docling-serve and will be ignored",
+            color_warn.warning("⚠ --mask is not supported with docling-serve and will be ignored"),
             file=sys.stderr,
         )
 
@@ -1770,7 +1787,9 @@ def main() -> int:
 
     try:
         if not args.quiet:
-            print(f"Starting docling-serve container...\n")
+            from mdify.formatting import Colorizer
+            color_start = Colorizer(sys.stdout)
+            print(f"{color_start.bright_cyan('▶️  Starting')} {color_start.bright_white('docling-serve')} {color_start.bright_cyan('container')}...\n")
 
         # Apply resource profile
         profile = RESOURCE_PROFILES[args.profile]
@@ -2009,22 +2028,30 @@ def main() -> int:
 
         # Print summary
         if not args.quiet:
+            from mdify.formatting import Colorizer
+            color_out = Colorizer(sys.stdout)
             print()
-            print("=" * 50)
-            print("Conversion Summary:")
-            print(f"  Total files:     {total_files}")
-            print(f"  Successful:      {success_count}")
-            print(f"  Skipped:         {skipped_count}")
-            print(f"  Failed:          {failed_count}")
-            print(f"  Total time:      {format_duration(total_elapsed)}")
-            print("=" * 50)
+            print(color_out.cyan("=" * 60))
+            print(color_out.bold_cyan("📊 Local Conversion Summary"))
+            print(color_out.cyan("=" * 60))
+            print(f"  {color_out.cyan('Total files:')} {color_out.bold(str(total_files))}")
+            if success_count > 0:
+                print(f"  {color_out.green('✓ Successful:')} {color_out.bold_green(str(success_count))}")
+            if skipped_count > 0:
+                print(f"  {color_out.yellow('⊘ Skipped:')} {color_out.bold_yellow(str(skipped_count))}")
+            if failed_count > 0:
+                print(f"  {color_out.red('✗ Failed:')} {color_out.bold_red(str(failed_count))}")
+            print(f"  {color_out.cyan('Total time:')} {color_out.bright_cyan(format_duration(total_elapsed))}")
+            print(color_out.cyan("=" * 60))
 
     except KeyboardInterrupt:
         if not args.quiet:
-            print("\n\nInterrupted by user. Container stopped.")
+            from mdify.formatting import Colorizer
+            color_out = Colorizer(sys.stdout)
+            print(f"\n\n{color_out.warning('⚠ Interrupted by user. Container stopped.')}")
             if success_count > 0 or skipped_count > 0 or failed_count > 0:
                 print(
-                    f"Partial progress: {success_count} successful, {failed_count} failed, {skipped_count} skipped"
+                    f"{color_out.dim_white('Partial progress:')} {color_out.green(str(success_count))} successful, {color_out.red(str(failed_count))} failed, {color_out.yellow(str(skipped_count))} skipped"
                 )
         return 130
 
