@@ -1175,7 +1175,8 @@ def main_async_remote(args) -> int:
             input_path = Path(args.input)
             if not input_path.exists():
                 await ssh_client.disconnect()
-                print(f"Error: Input file or directory not found: {args.input}", file=sys.stderr)
+                color = Colorizer(sys.stderr)
+                print(f"{color.error('✗ Error:')} Input file or directory not found: {args.input}", file=sys.stderr)
                 return 1
             
             # Store resolved path as base for relative path calculations
@@ -1184,8 +1185,9 @@ def main_async_remote(args) -> int:
             
             if not files_to_convert:
                 await ssh_client.disconnect()
-                print(f"Error: No supported files found in {args.input}", file=sys.stderr)
-                print(f"  Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}", file=sys.stderr)
+                color = Colorizer(sys.stderr)
+                print(f"{color.error('✗ Error:')} No supported files found in {args.input}", file=sys.stderr)
+                print(f"  {color.dim_white(f'Supported formats: {', '.join(sorted(SUPPORTED_EXTENSIONS))}')} ", file=sys.stderr)
                 return 1
             
             if not args.quiet:
@@ -1741,18 +1743,21 @@ def main() -> int:
 
     # Validate input
     if not input_path.exists():
-        print(f"Error: Input path does not exist: {input_path}", file=sys.stderr)
+        color = Colorizer(sys.stderr)
+        print(f"{color.error('✗ Error:')} Input path does not exist: {input_path}", file=sys.stderr)
         return 1
 
     # Get files to convert
     try:
         files_to_convert = get_files_to_convert(input_path, args.glob, args.recursive)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        color = Colorizer(sys.stderr)
+        print(f"{color.error('✗ Error:')} {e}", file=sys.stderr)
         return 1
 
     if not files_to_convert:
-        print(f"No files found to convert in: {input_path}", file=sys.stderr)
+        color = Colorizer(sys.stderr)
+        print(f"{color.warning('⚠ Warning:')} No files found to convert in: {input_path}", file=sys.stderr)
         return 1
 
     total_files = len(files_to_convert)
