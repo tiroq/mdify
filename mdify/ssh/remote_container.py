@@ -122,6 +122,7 @@ class RemoteContainer(DoclingContainer):
                 f"{self.runtime} run "
                 f"--name {self.name} "
                 f"--publish {self.port}:5001 "
+                f"--env DOCLING_SERVE_MAX_SYNC_WAIT={self.timeout} "
                 f"--detach "
                 f"{self.image}"
             )
