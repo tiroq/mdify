@@ -85,6 +85,9 @@ class Colorizer:
     def bright_red(self, text: str) -> str:
         return self._apply(text, self.BRIGHT_RED)
 
+    def bright_white(self, text: str) -> str:
+        return self._apply(text, self.BRIGHT_WHITE)
+
     # Styles
     def bold(self, text: str) -> str:
         return self._apply(text, self.BOLD)
