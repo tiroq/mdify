@@ -80,8 +80,12 @@ def _extract_content(result_data) -> str:
         result_data: Response data from docling-serve API
 
     Returns:
-        Extracted content string, or empty string if not found
+        Extracted content string, or empty string if not found or if response is an error
     """
+    # Detect error responses and return empty string instead of parsing them
+    if _is_error_response(result_data):
+        return ""
+    
     if isinstance(result_data, dict):
         # New format with document field
         if "document" in result_data:
