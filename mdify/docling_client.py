@@ -62,6 +62,15 @@ def _is_error_response(result_data) -> bool:
     if not isinstance(result_data, dict):
         return False
     
+    # If we have a document payload, treat as success
+    if "document" in result_data:
+        return False
+
+    # If status exists and indicates success, don't treat as error
+    status_val = result_data.get("status")
+    if isinstance(status_val, str) and status_val.lower() in {"ok", "success", "completed"}:
+        return False
+
     # Check for common error keys at top level
     error_keys = {"detail", "error", "message", "code", "status"}
     return bool(error_keys & set(result_data.keys()))
