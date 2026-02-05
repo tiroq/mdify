@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch, Mock
+from unittest.mock import patch, Mock, AsyncMock
 import pytest
 from urllib.error import URLError
 
@@ -24,7 +24,12 @@ from mdify.cli import (
     check_image_exists,
     pull_image,
     get_image_size_estimate,
+    _handle_cleanup_failure,
+    _print_cleanup_summary,
+    main_async_remote,
 )
+from mdify.container import CleanupSummary, CleanupFailure
+from mdify.formatting import Colorizer
 
 
 @pytest.fixture
@@ -336,6 +341,125 @@ class TestYesFlag:
             args = parse_args()
             assert args.yes is True
             assert args.input == "test.pdf"
+
+
+class TestCleanupGate:
+    """Tests for cleanup gating behavior in main()."""
+
+    def test_cleanup_failure_blocks_when_not_confirmed(self, tmp_path, monkeypatch):
+        """Main should abort if cleanup fails and user does not confirm."""
+        monkeypatch.setenv("MDIFY_NO_UPDATE_CHECK", "1")
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        summary = CleanupSummary(
+            target="local",
+            runtime="docker",
+            stopped_count=0,
+            removed_count=0,
+            failures=[CleanupFailure("mdify-serve-abc", "stop", "Stop failed", 1)],
+        )
+
+        with patch.object(sys, "argv", ["mdify", str(test_file)]):
+            with patch("mdify.cli.detect_runtime", return_value="/usr/bin/docker"):
+                with patch("mdify.cli.check_image_exists", return_value=True):
+                    with patch("mdify.cli.get_files_to_convert", return_value=[test_file]):
+                        with patch("mdify.cli.validate_memory_availability", return_value=(True, "")):
+                            with patch("mdify.cli.cleanup_managed_containers", return_value=summary):
+                                with patch("mdify.cli.confirm_proceed", return_value=False):
+                                    from mdify.cli import main
+
+                                    result = main()
+                                    assert result == 130
+
+    def test_remote_cleanup_failure_blocks_when_not_confirmed(self, tmp_path):
+        """Remote cleanup failure should abort before starting remote container."""
+        test_file = tmp_path / "test.pdf"
+        test_file.write_bytes(b"%PDF-1.4 test")
+
+        with patch.object(sys, "argv", [
+            "mdify",
+            "--remote-host",
+            "example.com",
+            "--remote-skip-ssh-config",
+            str(test_file),
+        ]):
+            args = parse_args()
+
+        class FakeSSHClient:
+            def __init__(self, config):
+                self.config = config
+
+            async def connect(self):
+                return None
+
+            async def disconnect(self):
+                return None
+
+            async def validate_remote_resources(self):
+                return {
+                    "can_connect": True,
+                    "work_dir_writable": True,
+                    "container_runtime_available": True,
+                    "disk_space_min_5gb": True,
+                    "memory_min_2gb": True,
+                }
+
+            async def check_container_runtime(self):
+                return "docker"
+
+            async def run_command(self, cmd, timeout=None):
+                return ("", "", 0)
+
+        summary = CleanupSummary(
+            target="remote",
+            runtime="docker",
+            failures=[CleanupFailure("mdify-remote-1", "stop", "Stop failed", 1)],
+        )
+
+        with patch("mdify.ssh.AsyncSSHClient", FakeSSHClient):
+            with patch("mdify.ssh.remote_container.cleanup_managed_containers", new=AsyncMock(return_value=summary)):
+                with patch("mdify.cli.get_files_to_convert", return_value=[test_file]):
+                    with patch("mdify.cli.confirm_proceed", return_value=False):
+                        result = main_async_remote(args)
+                        assert result == 130
+
+
+class TestCleanupSummaryOutput:
+    """Tests for cleanup summary output and confirmation handling."""
+
+    def test_print_cleanup_summary_includes_failures(self, capsys):
+        color = Colorizer(sys.stderr)
+        summary = CleanupSummary(
+            target="local",
+            runtime="docker",
+            stopped_count=1,
+            removed_count=2,
+            failures=[CleanupFailure("mdify-serve-abc", "remove", "Remove failed", 1)],
+        )
+
+        _print_cleanup_summary(summary, color, quiet=False)
+        captured = capsys.readouterr()
+        assert "Failures: 1" in captured.err
+        assert "mdify-serve-abc" in captured.err
+
+    def test_handle_cleanup_failure_prompts_confirmation(self):
+        color = Colorizer(sys.stderr)
+        summary = CleanupSummary(
+            target="local",
+            runtime="docker",
+            failures=[CleanupFailure("mdify-serve-abc", "stop", "Stop failed", 1)],
+        )
+
+        args = Mock()
+        args.yes = False
+
+        with patch("mdify.cli.confirm_proceed", return_value=True) as mock_confirm:
+            proceed = _handle_cleanup_failure(summary, args, color)
+
+        assert proceed is True
+        assert summary.proceeded_after_failure is True
+        assert mock_confirm.called
 
 
 class TestPathResolution:

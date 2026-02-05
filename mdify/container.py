@@ -1,11 +1,148 @@
 """Container lifecycle management for docling-serve."""
 
+import os
 import subprocess
 import time
 import uuid
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List, Tuple
 
 from mdify.docling_client import check_health
+
+
+MANAGED_CONTAINER_PREFIXES: Tuple[str, ...] = (
+    "mdify-serve-",
+    "mdify-remote-",
+    "mdify-",
+)
+
+
+@dataclass
+class CleanupFailure:
+    """Represents a container cleanup failure."""
+
+    container_name: str
+    action: str
+    reason: str
+    exit_code: Optional[int] = None
+
+
+@dataclass
+class CleanupSummary:
+    """Summary of cleanup actions."""
+
+    target: str
+    runtime: str
+    stopped_count: int = 0
+    removed_count: int = 0
+    failures: List[CleanupFailure] = field(default_factory=list)
+    retry_attempted: bool = False
+    proceeded_after_failure: bool = False
+
+
+def _list_managed_containers(
+    runtime: str,
+    prefixes: Tuple[str, ...] = MANAGED_CONTAINER_PREFIXES,
+) -> List[Tuple[str, str]]:
+    """List managed containers with their state.
+
+    Returns list of (name, state) tuples.
+    """
+    result = subprocess.run(
+        [runtime, "ps", "-a", "--format", "{{.Names}}\t{{.State}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+
+    managed: List[Tuple[str, str]] = []
+    for line in result.stdout.strip().split("\n"):
+        parts = line.strip().split("\t", 1)
+        name = parts[0].strip() if parts else ""
+        state = parts[1].strip().lower() if len(parts) > 1 else "unknown"
+        if name and any(name.startswith(prefix) for prefix in prefixes):
+            managed.append((name, state))
+
+    return managed
+
+
+def cleanup_managed_containers(
+    runtime: str,
+    prefixes: Tuple[str, ...] = MANAGED_CONTAINER_PREFIXES,
+    retry_once: bool = True,
+) -> CleanupSummary:
+    """Stop and remove managed containers with a single retry on failure."""
+    runtime_name = os.path.basename(runtime)
+    summary = CleanupSummary(target="local", runtime=runtime_name)
+
+    def attempt_cleanup() -> Tuple[int, int, List[CleanupFailure]]:
+        stopped = 0
+        removed = 0
+        failures: List[CleanupFailure] = []
+        containers = _list_managed_containers(runtime, prefixes=prefixes)
+        for container_name, state in containers:
+            stopped_ok = True
+            if state == "running":
+                stop_result = subprocess.run(
+                    [runtime, "stop", container_name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if stop_result.returncode != 0:
+                    failures.append(
+                        CleanupFailure(
+                            container_name=container_name,
+                            action="stop",
+                            reason=stop_result.stderr.strip()
+                            or stop_result.stdout.strip()
+                            or "Stop failed",
+                            exit_code=stop_result.returncode,
+                        )
+                    )
+                    stopped_ok = False
+                else:
+                    stopped += 1
+
+            if stopped_ok:
+                rm_result = subprocess.run(
+                    [runtime, "rm", container_name],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if rm_result.returncode != 0:
+                    failures.append(
+                        CleanupFailure(
+                            container_name=container_name,
+                            action="remove",
+                            reason=rm_result.stderr.strip()
+                            or rm_result.stdout.strip()
+                            or "Remove failed",
+                            exit_code=rm_result.returncode,
+                        )
+                    )
+                else:
+                    removed += 1
+
+        return stopped, removed, failures
+
+    stopped, removed, failures = attempt_cleanup()
+    summary.stopped_count += stopped
+    summary.removed_count += removed
+    summary.failures = failures
+
+    if failures and retry_once:
+        summary.retry_attempted = True
+        stopped_retry, removed_retry, failures_retry = attempt_cleanup()
+        summary.stopped_count += stopped_retry
+        summary.removed_count += removed_retry
+        summary.failures = failures_retry
+
+    return summary
 
 
 class DoclingContainer:

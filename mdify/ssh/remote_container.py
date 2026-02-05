@@ -2,11 +2,101 @@
 
 import logging
 import uuid
-from typing import Literal
-from mdify.container import DoclingContainer
+from typing import Literal, List, Tuple
+from mdify.container import (
+    DoclingContainer,
+    CleanupSummary,
+    CleanupFailure,
+    MANAGED_CONTAINER_PREFIXES,
+)
 from mdify.ssh.models import RemoteContainerState
 
 logger = logging.getLogger(__name__)
+
+
+async def _list_managed_containers(
+    ssh_client,
+    runtime: str,
+    prefixes: Tuple[str, ...] = MANAGED_CONTAINER_PREFIXES,
+) -> List[Tuple[str, str]]:
+    """List managed containers on remote with their state."""
+    cmd = f"{runtime} ps -a --format '{{{{.Names}}}}\t{{{{.State}}}}'"
+    stdout, stderr, code = await ssh_client.run_command(cmd, timeout=10)
+    if code != 0 or not stdout.strip():
+        return []
+
+    managed: List[Tuple[str, str]] = []
+    for line in stdout.strip().split("\n"):
+        parts = line.strip().split("\t", 1)
+        name = parts[0].strip() if parts else ""
+        state = parts[1].strip().lower() if len(parts) > 1 else "unknown"
+        if name and any(name.startswith(prefix) for prefix in prefixes):
+            managed.append((name, state))
+    return managed
+
+
+async def cleanup_managed_containers(
+    ssh_client,
+    runtime: str,
+    prefixes: Tuple[str, ...] = MANAGED_CONTAINER_PREFIXES,
+    retry_once: bool = True,
+) -> CleanupSummary:
+    """Stop and remove managed containers on remote with a single retry."""
+    summary = CleanupSummary(target="remote", runtime=runtime)
+
+    async def attempt_cleanup() -> Tuple[int, int, List[CleanupFailure]]:
+        stopped = 0
+        removed = 0
+        failures: List[CleanupFailure] = []
+        containers = await _list_managed_containers(ssh_client, runtime, prefixes=prefixes)
+        for container_name, state in containers:
+            stopped_ok = True
+            if state == "running":
+                stop_cmd = f"{runtime} stop {container_name}"
+                _stdout, stderr, code = await ssh_client.run_command(stop_cmd, timeout=10)
+                if code != 0:
+                    failures.append(
+                        CleanupFailure(
+                            container_name=container_name,
+                            action="stop",
+                            reason=stderr.strip() or "Stop failed",
+                            exit_code=code,
+                        )
+                    )
+                    stopped_ok = False
+                else:
+                    stopped += 1
+
+            if stopped_ok:
+                rm_cmd = f"{runtime} rm {container_name}"
+                _stdout, stderr, code = await ssh_client.run_command(rm_cmd, timeout=10)
+                if code != 0:
+                    failures.append(
+                        CleanupFailure(
+                            container_name=container_name,
+                            action="remove",
+                            reason=stderr.strip() or "Remove failed",
+                            exit_code=code,
+                        )
+                    )
+                else:
+                    removed += 1
+
+        return stopped, removed, failures
+
+    stopped, removed, failures = await attempt_cleanup()
+    summary.stopped_count += stopped
+    summary.removed_count += removed
+    summary.failures = failures
+
+    if failures and retry_once:
+        summary.retry_attempted = True
+        stopped_retry, removed_retry, failures_retry = await attempt_cleanup()
+        summary.stopped_count += stopped_retry
+        summary.removed_count += removed_retry
+        summary.failures = failures_retry
+
+    return summary
 
 
 class RemoteContainer(DoclingContainer):
