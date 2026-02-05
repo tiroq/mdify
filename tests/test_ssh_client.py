@@ -1,9 +1,10 @@
 """Tests for SSH client implementation."""
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, AsyncMock
 from mdify.ssh.models import SSHConfig, SSHConnectionError, ConfigError
 from mdify.ssh.client import AsyncSSHClient
+from mdify.ssh.remote_container import cleanup_managed_containers
 
 
 class TestSSHConfig:
@@ -149,3 +150,34 @@ class TestConfigParsing:
         assert config_dict["port"] == 2222
         assert "password" not in config_dict  # Secrets excluded
         assert "key_file" not in config_dict  # Secrets excluded
+
+
+class TestRemoteCleanup:
+    """Tests for remote cleanup helpers."""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_managed_containers_remote(self):
+        """Cleanup stops running containers and removes managed containers on remote."""
+        ssh_client = Mock()
+
+        async def run_command_side_effect(cmd, timeout=None):
+            if "ps -a" in cmd:
+                return (
+                    "mdify-remote-1\trunning\nmdify-foo\texited\n",
+                    "",
+                    0,
+                )
+            return ("", "", 0)
+
+        ssh_client.run_command = AsyncMock(side_effect=run_command_side_effect)
+
+        summary = await cleanup_managed_containers(ssh_client, "docker")
+
+        assert summary.stopped_count == 1
+        assert summary.removed_count == 2
+        assert summary.failures == []
+
+        calls = [call.args[0] for call in ssh_client.run_command.call_args_list]
+        assert any("stop mdify-remote-1" in call for call in calls)
+        assert any("rm mdify-remote-1" in call for call in calls)
+        assert any("rm mdify-foo" in call for call in calls)

@@ -1,10 +1,11 @@
 """Tests for container module."""
 
 from unittest.mock import patch, Mock
+import time
 import pytest
 import subprocess
 
-from mdify.container import DoclingContainer
+from mdify.container import DoclingContainer, cleanup_managed_containers, MANAGED_CONTAINER_PREFIXES
 
 
 class TestDoclingContainerInit:
@@ -418,3 +419,109 @@ class TestDoclingContainerCleanup:
             assert ps_called
             assert run_called
             assert "ps" in all_calls[0][0][0]
+
+
+class TestCleanupManagedContainers:
+    """Tests for managed container cleanup helpers."""
+
+    def test_cleanup_discovers_and_removes_managed_containers(self):
+        """Cleanup stops running containers and removes managed containers only."""
+        def run_side_effect(cmd, capture_output=True, text=True, check=False):
+            if cmd[1:3] == ["ps", "-a"]:
+                mock_result = Mock()
+                mock_result.returncode = 0
+                mock_result.stdout = (
+                    "mdify-serve-abc\trunning\n"
+                    "unrelated\trunning\n"
+                    "mdify-remote-123\texited\n"
+                )
+                return mock_result
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("mdify.container.subprocess.run", side_effect=run_side_effect) as mock_run:
+            summary = cleanup_managed_containers("docker")
+
+        assert summary.stopped_count == 1
+        assert summary.removed_count == 2
+        assert summary.failures == []
+        assert all(
+            prefix in MANAGED_CONTAINER_PREFIXES
+            for prefix in ("mdify-serve-", "mdify-remote-", "mdify-")
+        )
+
+        stop_calls = [call for call in mock_run.call_args_list if call[0][0][1] == "stop"]
+        rm_calls = [call for call in mock_run.call_args_list if call[0][0][1] == "rm"]
+        assert len(stop_calls) == 1
+        assert len(rm_calls) == 2
+
+    def test_cleanup_retries_once_on_failure(self):
+        """Cleanup retries once when stop fails and succeeds on retry."""
+        state = {"attempt": 0}
+
+        def run_side_effect(cmd, capture_output=True, text=True, check=False):
+            if cmd[1:3] == ["ps", "-a"]:
+                mock_result = Mock()
+                mock_result.returncode = 0
+                mock_result.stdout = "mdify-serve-abc\trunning\n"
+                return mock_result
+            if cmd[1] == "stop":
+                mock_result = Mock()
+                if state["attempt"] == 0:
+                    mock_result.returncode = 1
+                    mock_result.stderr = "Stop failed"
+                    state["attempt"] += 1
+                else:
+                    mock_result.returncode = 0
+                    mock_result.stderr = ""
+                mock_result.stdout = ""
+                return mock_result
+            if cmd[1] == "rm":
+                mock_result = Mock()
+                mock_result.returncode = 0
+                mock_result.stdout = ""
+                mock_result.stderr = ""
+                return mock_result
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("mdify.container.subprocess.run", side_effect=run_side_effect):
+            summary = cleanup_managed_containers("docker", retry_once=True)
+
+        assert summary.retry_attempted is True
+        assert summary.failures == []
+        assert summary.stopped_count == 1
+        assert summary.removed_count == 1
+
+    def test_cleanup_performance_mocked_timing(self):
+        """Cleanup completes within 30 seconds for 50 containers (mocked timing)."""
+        containers = "\n".join(
+            [f"mdify-serve-{i}\trunning" for i in range(25)]
+            + [f"mdify-remote-{i}\texited" for i in range(25)]
+        )
+
+        def run_side_effect(cmd, capture_output=True, text=True, check=False):
+            if cmd[1:3] == ["ps", "-a"]:
+                mock_result = Mock()
+                mock_result.returncode = 0
+                mock_result.stdout = containers
+                return mock_result
+            mock_result = Mock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("mdify.container.subprocess.run", side_effect=run_side_effect):
+            start = time.perf_counter()
+            summary = cleanup_managed_containers("docker")
+            elapsed = time.perf_counter() - start
+
+        assert summary.removed_count == 50
+        assert elapsed < 30
