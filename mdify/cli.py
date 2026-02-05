@@ -24,7 +24,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from . import __version__
-from mdify.container import DoclingContainer
+from mdify.container import DoclingContainer, cleanup_managed_containers, CleanupSummary
 from mdify.docling_client import convert_file
 
 # Configuration
@@ -632,6 +632,48 @@ def confirm_proceed(message: str, default_no: bool = True) -> bool:
     return response.lower() == "y"
 
 
+def _print_cleanup_summary(summary: CleanupSummary, color, quiet: bool) -> None:
+    """Print cleanup summary and failures."""
+    if quiet:
+        return
+
+    target_label = "Local" if summary.target == "local" else "Remote"
+    print(color.cyan(f"{target_label} cleanup summary:"), file=sys.stderr)
+    print(
+        f"  {color.green('Stopped:')} {summary.stopped_count}  {color.green('Removed:')} {summary.removed_count}",
+        file=sys.stderr,
+    )
+    if summary.failures:
+        print(color.yellow(f"  Failures: {len(summary.failures)}"), file=sys.stderr)
+        for failure in summary.failures:
+            print(
+                color.yellow(
+                    f"    - {failure.container_name} ({failure.action}): {failure.reason}"
+                ),
+                file=sys.stderr,
+            )
+
+
+def _handle_cleanup_failure(summary: CleanupSummary, args, color) -> bool:
+    """Handle cleanup failures with optional confirmation.
+
+    Returns True if processing should proceed, False otherwise.
+    """
+    if not summary.failures:
+        return True
+
+    if args.yes:
+        summary.proceeded_after_failure = True
+        return True
+
+    if confirm_proceed("Cleanup failed. Continue anyway?"):
+        summary.proceeded_after_failure = True
+        return True
+
+    print(color.error("✗ Cleanup failed and was not confirmed. Aborting."), file=sys.stderr)
+    return False
+
+
 class Spinner:
     """A simple spinner to show progress during long operations."""
 
@@ -1205,7 +1247,7 @@ def main_async_remote(args) -> int:
             
             # Import remote container and transfer manager
             from mdify.ssh.transfer import FileTransferManager
-            from mdify.ssh.remote_container import RemoteContainer
+            from mdify.ssh.remote_container import RemoteContainer, cleanup_managed_containers as remote_cleanup
             
             # Determine container runtime and image
             runtime = ssh_config.container_runtime
@@ -1243,6 +1285,12 @@ def main_async_remote(args) -> int:
                 await ssh_client.disconnect()
                 print(f"Error: Failed to create remote work directory: {work_dir}", file=sys.stderr)
                 return 1
+
+            cleanup_summary = await remote_cleanup(ssh_client, runtime)
+            _print_cleanup_summary(cleanup_summary, color, args.quiet)
+            if not _handle_cleanup_failure(cleanup_summary, args, color):
+                await ssh_client.disconnect()
+                return 130
             
             # Start remote container
             if not args.quiet:
@@ -1820,8 +1868,6 @@ def main() -> int:
     total_elapsed = 0.0
 
     try:
-        if not args.quiet:
-            print(f"{color_stdout.bright_cyan('▶️  Starting')} {color_stdout.bright_white('docling-serve')} {color_stdout.bright_cyan('container')}...\n")
 
         # Apply resource profile
         profile = RESOURCE_PROFILES[args.profile]
@@ -1843,6 +1889,14 @@ def main() -> int:
             if args.cpus or args.memory:
                 print("  (customized via command-line arguments)")
             print()
+
+        cleanup_summary = cleanup_managed_containers(runtime)
+        _print_cleanup_summary(cleanup_summary, color_stderr, args.quiet)
+        if not _handle_cleanup_failure(cleanup_summary, args, color_stderr):
+            return 130
+
+        if not args.quiet:
+            print(f"{color_stdout.bright_cyan('▶️  Starting')} {color_stdout.bright_white('docling-serve')} {color_stdout.bright_cyan('container')}...\n")
 
         with DoclingContainer(
             runtime,
