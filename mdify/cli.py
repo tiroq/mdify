@@ -1358,7 +1358,7 @@ def main_async_remote(args) -> int:
                             if output_file.exists() and not args.overwrite:
                                 if not args.quiet:
                                     print(
-                                        f"  {color.yellow('⊘ Skipped:')} {output_file} already exists (use --overwrite to replace)",
+                                        f"{progress_prefix} {file_name} {color.yellow('⊘ (skipped - exists)')}",
                                         file=sys.stderr,
                                     )
                                 break
@@ -1407,20 +1407,12 @@ def main_async_remote(args) -> int:
                                         break
                                     else:
                                         # Non-zero exit code - fail without retry for non-connection errors
-                                        if not args.quiet:
-                                            print(f"  ✗ curl exited with code {conv_code}", file=sys.stderr)
-                                            if conversion_output:
-                                                print(f"  Output: {conversion_output[:500]}", file=sys.stderr)
-                                            if stderr_output:
-                                                print(f"  Error: {stderr_output[:500]}", file=sys.stderr)
                                         break
                                 except Exception as conv_exc:
                                     is_conn_err = is_connection_error(conv_exc)
                                     if is_conn_err and conversion_attempt < 3:
-                                        if not args.quiet:
-                                            # Exponential backoff: 5s, 10s
-                                            backoff_delay = 5 * conversion_attempt
-                                            print(f"  ↻ Connection reset during conversion. Reconnecting in {backoff_delay}s...", file=sys.stderr)
+                                        # Exponential backoff: 5s, 10s
+                                        backoff_delay = 5 * conversion_attempt
                                         
                                         await asyncio.sleep(backoff_delay)
                                         
@@ -1434,18 +1426,14 @@ def main_async_remote(args) -> int:
                                         try:
                                             await ssh_client.connect()
                                         except Exception:
-                                            if not args.quiet:
-                                                print(f"  ⚠ Reconnection failed: retrying...", file=sys.stderr)
                                             continue
                                     else:
                                         # Either not a connection error, or we've exhausted retries
-                                        if conversion_attempt >= 3 and is_conn_err:
-                                            if not args.quiet:
-                                                print(f"  ↻ Connection error on final retry attempt", file=sys.stderr)
                                         break
                             
                             if not conversion_success:
-                                print(f"  {color.error('✗ Failed:')} Conversion failed after {conversion_attempt} attempt(s)", file=sys.stderr)
+                                if not args.quiet:
+                                    print(f"{progress_prefix} {file_name} {color.red('✗ (conversion failed)')}", file=sys.stderr)
                                 failed += 1
                                 break
                             
@@ -1474,10 +1462,9 @@ def main_async_remote(args) -> int:
                                 # Check if response is an error response
                                 if _is_error_response(response_data):
                                     error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
-                                    print(f"  {color_err.error('✗ Failed:')} {error_detail}", file=sys.stderr)
-                                    if "DOCLING_SERVE_MAX_SYNC_WAIT" in str(error_detail):
-                                        timeout_val = args.timeout or 3600
-                                        print(f"  {color_err.info('ℹ Tip:')} Increase timeout with --timeout (current: {timeout_val}s)", file=sys.stderr)
+                                    if not args.quiet:
+                                        error_snippet = str(error_detail)[:40]
+                                        print(f"{progress_prefix} {file_name} {color.red(f'✗ ({error_snippet})')}", file=sys.stderr)
                                     failed += 1
                                     break
                                 
@@ -1486,20 +1473,13 @@ def main_async_remote(args) -> int:
                                 
                                 # Validate content exists and is not empty/too short
                                 if not markdown_content or len(markdown_content.strip()) < 50:
-                                    print(f"  {color_err.error('✗ Failed:')} Empty or invalid conversion result", file=sys.stderr)
-                                    if args.timeout and args.timeout < 300:
-                                        print(
-                                            f"  {color_err.info('ℹ Tip:')} Timeout is only {args.timeout}s. Consider increasing with --timeout (default: 3600s for remote)",
-                                            file=sys.stderr,
-                                        )
+                                    if not args.quiet:
+                                        print(f"{progress_prefix} {file_name} {color.red('✗ (empty result)')}", file=sys.stderr)
                                     failed += 1
                                     break
                                 
                                 # Write markdown content to local temp file first, then upload via SFTP
                                 # (Piping large content through SSH here-documents can crash the connection)
-                                content_size_kb = len(markdown_content) / 1024
-                                if not args.quiet:
-                                    print(f"  {color.cyan('Writing')} {content_size_kb:.1f}KB markdown via SFTP...", file=sys.stderr)
                                 
                                 temp_path = None
                                 try:
@@ -1515,12 +1495,12 @@ def main_async_remote(args) -> int:
                                         overwrite=True,
                                         compress=False,
                                     )
-                                    
-                                    if not args.quiet:
-                                        print(f"  {color.green('✓')} Markdown written", file=sys.stderr)
                                 except Exception as write_exc:
                                     if not args.quiet:
-                                        print(f"  ✗ Failed to write markdown: {write_exc}", file=sys.stderr)
+                                        print(
+                                            f"{progress_prefix} {file_name} {color.red(f'✗ (write failed: {str(write_exc)[:40]})')}",
+                                            file=sys.stderr,
+                                        )
                                     failed += 1
                                     break
                                 finally:
@@ -1533,7 +1513,8 @@ def main_async_remote(args) -> int:
                                                 print(f"  ! Failed to remove temporary file {temp_path}: {cleanup_exc}", file=sys.stderr)
                                 
                             except (json.JSONDecodeError, KeyError, IndexError):
-                                print(f"  ✗ Failed to parse conversion response", file=sys.stderr)
+                                if not args.quiet:
+                                    print(f"{progress_prefix} {file_name} {color.red('✗ (parse error)')}", file=sys.stderr)
                                 if DEBUG and conversion_output:
                                     # Only print a snippet of the response for debugging
                                     response_snippet = conversion_output[:300] + ("..." if len(conversion_output) > 300 else "")
@@ -1541,13 +1522,7 @@ def main_async_remote(args) -> int:
                                 failed += 1
                                 break
                             
-                            if not args.quiet:
-                                print(f"  ✓ Conversion complete", file=sys.stderr)
-                            
                             # Download result
-                            if not args.quiet:
-                                print(color.cyan(f"  Downloading result to {output_file}..."), file=sys.stderr)
-                            
                             await transfer_manager.download_file(
                                 remote_path=remote_output_path,
                                 local_path=str(output_file),
@@ -1555,7 +1530,7 @@ def main_async_remote(args) -> int:
                             )
                             
                             if not args.quiet:
-                                print(color.green(f"  ✓ Download complete: {output_file}"), file=sys.stderr)
+                                print(f"{progress_prefix} {file_name} {color.green('✓')}", file=sys.stderr)
                             
                             successful += 1
                             
@@ -1566,8 +1541,6 @@ def main_async_remote(args) -> int:
                         except Exception as e:
                             if is_connection_error(e) and attempt == 0:
                                 attempt += 1
-                                if not args.quiet:
-                                    print(color.yellow("  ↻ Connection lost. Reconnecting..."), file=sys.stderr)
                                 try:
                                     await ssh_client.disconnect()
                                 except Exception:
@@ -1576,7 +1549,9 @@ def main_async_remote(args) -> int:
                                 await ssh_client.connect()
                                 continue
                             
-                            print(f"  {color.error('✗ Failed:')} {str(e)}", file=sys.stderr)
+                            if not args.quiet:
+                                error_snippet = str(e)[:50]
+                                print(f"{progress_prefix} {file_name} {color.red(f'✗ ({error_snippet})')}", file=sys.stderr)
                             if DEBUG:
                                 import traceback
                                 traceback.print_exc(file=sys.stderr)
