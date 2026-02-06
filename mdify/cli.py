@@ -1505,7 +1505,7 @@ def main_async_remote(args) -> int:
                             
                             if not conversion_success:
                                 if not args.quiet:
-                                    print(f"{progress_prefix} {file_name} {color.red('✗ (conversion failed)')}", file=sys.stderr)
+                                    progress.complete("✗", "red")
                                 failed += 1
                                 break
                             
@@ -1535,8 +1535,7 @@ def main_async_remote(args) -> int:
                                 if _is_error_response(response_data):
                                     error_detail = response_data.get("detail", response_data.get("error", str(response_data)))
                                     if not args.quiet:
-                                        error_snippet = str(error_detail)[:40]
-                                        print(f"{progress_prefix} {file_name} {color.red(f'✗ ({error_snippet})')}", file=sys.stderr)
+                                        progress.complete("✗", "red")
                                     failed += 1
                                     break
                                 
@@ -1546,7 +1545,7 @@ def main_async_remote(args) -> int:
                                 # Validate content exists and is not empty/too short
                                 if not markdown_content or len(markdown_content.strip()) < 50:
                                     if not args.quiet:
-                                        print(f"{progress_prefix} {file_name} {color.red('✗ (empty result)')}", file=sys.stderr)
+                                        progress.complete("✗", "red")
                                     failed += 1
                                     break
                                 
@@ -1569,10 +1568,7 @@ def main_async_remote(args) -> int:
                                     )
                                 except Exception as write_exc:
                                     if not args.quiet:
-                                        print(
-                                            f"{progress_prefix} {file_name} {color.red(f'✗ (write failed: {str(write_exc)[:40]})')}",
-                                            file=sys.stderr,
-                                        )
+                                        progress.complete("✗", "red")
                                     failed += 1
                                     break
                                 finally:
@@ -1586,7 +1582,7 @@ def main_async_remote(args) -> int:
                                 
                             except (json.JSONDecodeError, KeyError, IndexError):
                                 if not args.quiet:
-                                    print(f"{progress_prefix} {file_name} {color.red('✗ (parse error)')}", file=sys.stderr)
+                                    progress.complete("✗", "red")
                                 if DEBUG and conversion_output:
                                     # Only print a snippet of the response for debugging
                                     response_snippet = conversion_output[:300] + ("..." if len(conversion_output) > 300 else "")
@@ -1595,6 +1591,9 @@ def main_async_remote(args) -> int:
                                 break
                             
                             # Download result
+                            if not args.quiet:
+                                progress.update("downloading...")
+                            
                             await transfer_manager.download_file(
                                 remote_path=remote_output_path,
                                 local_path=str(output_file),
@@ -1602,7 +1601,7 @@ def main_async_remote(args) -> int:
                             )
                             
                             if not args.quiet:
-                                print(f"{progress_prefix} {file_name} {color.green('✓')}", file=sys.stderr)
+                                progress.complete("✓", "green")
                             
                             successful += 1
                             
@@ -1622,8 +1621,7 @@ def main_async_remote(args) -> int:
                                 continue
                             
                             if not args.quiet:
-                                error_snippet = str(e)[:50]
-                                print(f"{progress_prefix} {file_name} {color.red(f'✗ ({error_snippet})')}", file=sys.stderr)
+                                progress.complete("✗", "red")
                             if DEBUG:
                                 import traceback
                                 traceback.print_exc(file=sys.stderr)
