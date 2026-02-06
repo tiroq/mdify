@@ -1046,7 +1046,7 @@ Examples:
         "--timeout",
         type=int,
         default=None,
-        help="Conversion timeout in seconds (default: 1200s for local, 3600s for remote with large PDFs, can be set via MDIFY_TIMEOUT env var)",
+        help="Conversion timeout in seconds (default: 1200s for local, 3600s for remote, can be set via MDIFY_TIMEOUT env var)",
     )
 
     parser.add_argument(
@@ -1218,12 +1218,12 @@ def main_async_remote(args) -> int:
 
         color = Colorizer(sys.stderr)
         
-        # Resolve timeout value: CLI > env > default 1200
-        timeout = args.timeout if args.timeout is not None else int(os.environ.get("MDIFY_TIMEOUT", 1200))
+        # Resolve timeout value: CLI > env > default 3600 for remote
+        timeout = args.timeout if args.timeout is not None else int(os.environ.get("MDIFY_TIMEOUT", 3600))
         
-        # For remote operations, extend timeout significantly for large PDF processing
+        # For remote operations, ensure minimum timeout for large PDF processing
         # Remote conversions include network latency, file upload/download, and OCR processing
-        remote_conversion_timeout = max(timeout or 1200, 3600)  # At least 1 hour for remote conversion
+        remote_conversion_timeout = max(timeout or 3600, 3600)  # At least 1 hour for remote conversion
         
         # Build SSH config from CLI arguments and SSH config files
         try:
