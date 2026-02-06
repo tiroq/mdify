@@ -711,6 +711,79 @@ class Spinner:
         print(f"\r{' ' * 120}\r", end="", flush=True)
 
 
+class FileProgressTracker:
+    """Track and display progress for file processing with dynamic status updates."""
+    
+    def __init__(self, file_idx: int, total_files: int, filename: str, color):
+        """
+        Initialize progress tracker for a single file.
+        
+        Args:
+            file_idx: Current file index (1-based)
+            total_files: Total number of files
+            filename: Name of the file being processed
+            color: Colorizer instance
+        """
+        self.file_idx = file_idx
+        self.total_files = total_files
+        self.filename = filename
+        self.color = color
+        self.start_time = time.time()
+        self.spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self.frame_idx = 0
+        self.current_operation = None
+        self.last_update = None
+    
+    def update(self, operation: str):
+        """
+        Update the progress display with current operation.
+        
+        Args:
+            operation: Current operation (e.g., "uploading", "converting", "downloading")
+        """
+        self.current_operation = operation
+        self.frame_idx = (self.frame_idx + 1) % len(self.spinner_frames)
+        
+        progress_prefix = self.color.cyan(f"[{self.file_idx}/{self.total_files}]")
+        spinner = self.spinner_frames[self.frame_idx]
+        filename = self.color.bright_white(self.filename)
+        operation_text = self.color.dim_white(operation)
+        elapsed = format_duration(time.time() - self.start_time)
+        
+        msg = f"\r{progress_prefix} {spinner} {filename} • {operation_text} ({elapsed})     "
+        print(msg, end="", flush=True)
+        self.last_update = msg
+    
+    def complete(self, status: str, status_color: str = "green"):
+        """
+        Complete and display final status.
+        
+        Args:
+            status: Status symbol/emoji (e.g., "✓", "✗", "⊘")
+            status_color: Color for the status
+        """
+        progress_prefix = self.color.cyan(f"[{self.file_idx}/{self.total_files}]")
+        filename = self.color.bright_white(self.filename)
+        elapsed = format_duration(time.time() - self.start_time)
+        
+        # Color the status based on result
+        if status_color == "green":
+            status_display = self.color.green(status)
+        elif status_color == "red":
+            status_display = self.color.red(status)
+        elif status_color == "yellow":
+            status_display = self.color.yellow(status)
+        else:
+            status_display = status
+        
+        msg = f"\r{progress_prefix} {status_display} {filename} ({elapsed})                    \n"
+        print(msg, end="", flush=True)
+    
+    def clear_line(self):
+        """Clear the current progress line."""
+        print(f"\r{' ' * 120}\r", end="", flush=True)
+
+
 # =============================================================================
 # File handling functions
 # =============================================================================
@@ -1327,15 +1400,16 @@ def main_async_remote(args) -> int:
             
             try:
                 for idx, input_file in enumerate(files_to_convert, 1):
-                    progress_prefix = color.cyan(f"[{idx}/{len(files_to_convert)}]")
-                    file_name = color.bright_white(input_file.name)
-                    status_symbol = None
-                    status_msg = None
+                    # Create progress tracker for this file
+                    progress = FileProgressTracker(idx, len(files_to_convert), input_file.name, color)
                     
                     attempt = 0
                     while attempt <= 1:  # Max 2 attempts (0 and 1)
                         try:
                             # Upload file
+                            if not args.quiet:
+                                progress.update("uploading...")
+                            
                             remote_file_path = f"{work_dir}/{input_file.name}"
                             
                             await transfer_manager.upload_file(
@@ -1345,7 +1419,8 @@ def main_async_remote(args) -> int:
                                 compress=False,
                             )
                             
-                            # Convert via remote container
+                            if not args.quiet:
+                                progress.update("converting...")
                             
                             # Determine output path
                             output_dir = Path(args.out_dir)
@@ -1357,10 +1432,7 @@ def main_async_remote(args) -> int:
                             # Check if output exists and skip if not overwrite
                             if output_file.exists() and not args.overwrite:
                                 if not args.quiet:
-                                    print(
-                                        f"{progress_prefix} {file_name} {color.yellow('⊘ (skipped - exists)')}",
-                                        file=sys.stderr,
-                                    )
+                                    progress.complete("⊘", "yellow")
                                 break
                             
                             # Convert using remote container's HTTP API
