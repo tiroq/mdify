@@ -715,34 +715,41 @@ class Spinner:
 # File handling functions
 # =============================================================================
 
-# Supported file extensions (based on Docling InputFormat)
+# Supported file extensions for conversion (based on official Docling InputFormat)
+# See: https://docs.docling.ai/latest/features/document_conversion_guide/
 SUPPORTED_EXTENSIONS = {
-    ".pdf",
-    ".docx",
-    ".pptx",
-    ".html",
-    ".htm",
+    # Document formats
+    ".pdf",  # PDF
+    ".docx",  # Microsoft Word (Office Open XML)
+    ".xlsx",  # Microsoft Excel (Office Open XML)
+    ".pptx",  # Microsoft PowerPoint (Office Open XML)
+    ".html",  # HTML
+    ".htm",   # HTML variant
+    ".xhtml", # XHTML
+    ".asciidoc",
+    ".adoc",
+    ".asc",  # AsciiDoc formats
+    # Data formats
+    ".csv",  # Comma-separated values
+    # Image formats
     ".png",
     ".jpg",
     ".jpeg",
-    ".gif",
-    ".bmp",
     ".tiff",
-    ".tif",  # images
-    ".asciidoc",
-    ".adoc",
-    ".asc",  # asciidoc
+    ".tif",
+    ".bmp",
+    ".webp",  # Images
+    # Text/Subtitle formats
+    ".vtt",  # WebVTT (Web Video Text Tracks)
+}
+
+# File extensions that should be skipped (not converted to markdown)
+# These formats are already in markdown or similar text format
+SKIPPED_EXTENSIONS = {
     ".md",
-    ".markdown",  # markdown
-    ".csv",
-    ".xlsx",  # spreadsheets
-    ".xml",  # XML formats
-    ".json",  # JSON docling
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".flac",  # audio
-    ".vtt",  # subtitles
+    ".markdown",  # Already markdown - no need to convert
+    ".json",
+    ".xml",
 }
 
 
@@ -763,11 +770,13 @@ def get_files_to_convert(input_path: Path, mask: str, recursive: bool) -> List[P
     else:
         raise FileNotFoundError(f"Input path does not exist: {input_path}")
 
-    # Filter out hidden files and unsupported formats
+    # Filter out hidden files, unsupported formats, and non-convertible formats
     files = [
         f
         for f in files
-        if not f.name.startswith(".") and f.suffix.lower() in SUPPORTED_EXTENSIONS
+        if not f.name.startswith(".")
+        and f.suffix.lower() in SUPPORTED_EXTENSIONS
+        and f.suffix.lower() not in SKIPPED_EXTENSIONS
     ]
 
     return files

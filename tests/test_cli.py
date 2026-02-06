@@ -858,6 +858,16 @@ class TestFileHandling:
         assert len(result) == 1
         assert result[0].name == "doc.pdf"
 
+    def test_skipped_extensions_excluded(self, tmp_path):
+        """Files with skipped extensions (.md, .json, .xml) are filtered out."""
+        (tmp_path / "doc.pdf").touch()  # Should be included
+        (tmp_path / "readme.md").touch()  # Skipped - already markdown
+        (tmp_path / "config.json").touch()  # Skipped - structured data
+        (tmp_path / "data.xml").touch()  # Skipped - structured data
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 1
+        assert result[0].name == "doc.pdf"
+
     def test_empty_directory(self, tmp_path):
         """Test empty directory returns empty list."""
         result = get_files_to_convert(tmp_path, mask="*", recursive=False)
