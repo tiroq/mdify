@@ -759,6 +759,8 @@ class FileProgressTracker:
     
     async def stop_live_update(self):
         """Stop the background progress update task."""
+        import asyncio
+        
         self._stop_updating = True
         if self._update_task:
             try:
