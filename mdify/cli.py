@@ -1327,20 +1327,16 @@ def main_async_remote(args) -> int:
             
             try:
                 for idx, input_file in enumerate(files_to_convert, 1):
-                    if not args.quiet:
-                        print(
-                            f"\n{color.cyan(f'[{idx}/{len(files_to_convert)}] Processing:')} {input_file.name}",
-                            file=sys.stderr,
-                        )
+                    progress_prefix = color.cyan(f"[{idx}/{len(files_to_convert)}]")
+                    file_name = color.bright_white(input_file.name)
+                    status_symbol = None
+                    status_msg = None
                     
                     attempt = 0
                     while attempt <= 1:  # Max 2 attempts (0 and 1)
                         try:
                             # Upload file
                             remote_file_path = f"{work_dir}/{input_file.name}"
-                            
-                            if not args.quiet:
-                                print(f"  {color.cyan('Uploading to')} {remote_file_path}...", file=sys.stderr)
                             
                             await transfer_manager.upload_file(
                                 local_path=str(input_file),
@@ -1349,12 +1345,7 @@ def main_async_remote(args) -> int:
                                 compress=False,
                             )
                             
-                            if not args.quiet:
-                                print(f"  {color.green('✓ Upload complete')}", file=sys.stderr)
-                            
                             # Convert via remote container
-                            if not args.quiet:
-                                print(f"  {color.cyan('Converting via remote container')}...", file=sys.stderr)
                             
                             # Determine output path
                             output_dir = Path(args.out_dir)
