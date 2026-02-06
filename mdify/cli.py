@@ -733,6 +733,38 @@ class FileProgressTracker:
         self.frame_idx = 0
         self.current_operation = None
         self.last_update = None
+        self._update_task = None
+        self._stop_updating = False
+    
+    async def start_live_update(self, operation: str):
+        """
+        Start continuous progress updates while a long operation runs.
+        This creates a background task that updates the display every 100ms.
+        
+        Args:
+            operation: Current operation (e.g., "converting", "uploading")
+        """
+        import asyncio
+        
+        self.current_operation = operation
+        self._stop_updating = False
+        
+        async def update_loop():
+            """Background task that continuously updates progress."""
+            while not self._stop_updating:
+                self.update(self.current_operation)
+                await asyncio.sleep(0.1)  # Update every 100ms for smooth animation
+        
+        self._update_task = asyncio.create_task(update_loop())
+    
+    async def stop_live_update(self):
+        """Stop the background progress update task."""
+        self._stop_updating = True
+        if self._update_task:
+            try:
+                await asyncio.wait_for(self._update_task, timeout=0.5)
+            except asyncio.TimeoutError:
+                self._update_task.cancel()
     
     def update(self, operation: str):
         """
@@ -1472,7 +1504,16 @@ def main_async_remote(args) -> int:
                                         print(f"  ↻ Conversion retry {conversion_attempt - 1} (waiting {backoff_delay}s for server recovery)...", file=sys.stderr)
                                         await asyncio.sleep(backoff_delay)
                                     
-                                    conversion_output, stderr_output, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
+                                    # Start live progress updates for the conversion
+                                    if not args.quiet:
+                                        await progress.start_live_update("converting...")
+                                    
+                                    try:
+                                        conversion_output, stderr_output, conv_code = await ssh_client.run_command(convert_cmd, timeout=remote_conversion_timeout)
+                                    finally:
+                                        # Stop live updates when conversion completes (success or failure)
+                                        if not args.quiet:
+                                            await progress.stop_live_update()
                                     
                                     if conv_code == 0:
                                         conversion_success = True
