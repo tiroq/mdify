@@ -1394,6 +1394,59 @@ class TestGetImageSizeEstimate:
             result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
         assert result == 150
 
+    def test_image_size_docker_list_format_schema_v2(self):
+        """Test get_image_size_estimate handles Docker --verbose array output (SchemaV2Manifest)."""
+        # docker manifest inspect --verbose returns a JSON array, not a dict
+        manifest_json = [
+            {
+                "Ref": "ghcr.io/example/image:main@sha256:amd64",
+                "Descriptor": {"platform": {"architecture": "amd64"}},
+                "SchemaV2Manifest": {
+                    "layers": [
+                        {"size": 1000},
+                        {"size": 2000},
+                    ]
+                },
+            },
+            {
+                "Ref": "ghcr.io/example/image:main@sha256:arm64",
+                "Descriptor": {"platform": {"architecture": "arm64"}},
+                "SchemaV2Manifest": {
+                    "layers": [
+                        {"size": 1500},
+                    ]
+                },
+            },
+        ]
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(manifest_json).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        # (1000+2000+1500) * 1.5 = 6750
+        assert result == 6750
+
+    def test_image_size_docker_list_format_oci(self):
+        """Test get_image_size_estimate handles Docker --verbose array output (OCIManifest)."""
+        manifest_json = [
+            {
+                "Ref": "ghcr.io/example/image:main@sha256:amd64",
+                "OCIManifest": {
+                    "layers": [
+                        {"size": 4000},
+                        {"size": 6000},
+                    ]
+                },
+            },
+        ]
+        mock_result = Mock()
+        mock_result.returncode = 0
+        mock_result.stdout = json.dumps(manifest_json).encode()
+        with patch("mdify.cli.subprocess.run", return_value=mock_result):
+            result = get_image_size_estimate("/usr/bin/docker", "test-image:latest")
+        # (4000+6000) * 1.5 = 15000
+        assert result == 15000
+
 
 class TestConfirmProceed:
     """Tests for confirm_proceed() user confirmation function."""
