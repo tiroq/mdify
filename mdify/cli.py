@@ -552,10 +552,22 @@ def get_image_size_estimate(runtime: str, image: str) -> Optional[int]:
 
         # Sum all layer sizes across all architectures
         total_size = 0
-        for manifest in manifest_data.get("Manifests", []):
-            oci_manifest = manifest.get("OCIManifest", {})
-            for layer in oci_manifest.get("layers", []):
-                total_size += layer.get("size", 0)
+
+        # Docker/OrbStack `manifest inspect --verbose` returns a JSON array,
+        # each element representing one platform manifest.
+        # Podman/buildah returns a dict with a top-level "Manifests" list.
+        if isinstance(manifest_data, list):
+            for manifest in manifest_data:
+                # Docker uses "SchemaV2Manifest", OCI images may use "OCIManifest"
+                for manifest_key in ("SchemaV2Manifest", "OCIManifest"):
+                    layers = manifest.get(manifest_key, {}).get("layers", [])
+                    for layer in layers:
+                        total_size += layer.get("size", 0)
+        elif isinstance(manifest_data, dict):
+            for manifest in manifest_data.get("Manifests", []):
+                oci_manifest = manifest.get("OCIManifest", {})
+                for layer in oci_manifest.get("layers", []):
+                    total_size += layer.get("size", 0)
 
         # Apply 50% buffer for decompression (compressed -> uncompressed)
         return int(total_size * 1.5)
