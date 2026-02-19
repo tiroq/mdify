@@ -36,8 +36,8 @@ CHECK_INTERVAL_SECONDS = 86400  # 24 hours
 # Container configuration
 DEFAULT_IMAGE = "ghcr.io/docling-project/docling-serve-cpu:main"
 GPU_IMAGE = "ghcr.io/docling-project/docling-serve-cu126:main"
-SUPPORTED_RUNTIMES = ("docker", "podman", "orbstack", "colima", "container")
-MACOS_RUNTIMES_PRIORITY = ("container", "orbstack", "colima", "podman", "docker")
+SUPPORTED_RUNTIMES = ("docker", "podman", "orbstack", "container")
+MACOS_RUNTIMES_PRIORITY = ("container", "orbstack", "podman", "docker")
 OTHER_RUNTIMES_PRIORITY = ("docker", "podman")
 
 # Debug mode
@@ -335,17 +335,46 @@ def detect_runtime(preferred: Optional[str] = None, explicit: bool = True) -> Op
     """
     Detect available container runtime.
 
-    First checks MDIFY_CONTAINER_RUNTIME environment variable for explicit override.
-    On macOS, tries native tools first (OrbStack → Colima → Podman → Docker).
-    On other platforms, tries Docker → Podman.
+    If `preferred` is provided (e.g. from --runtime flag), it is used directly
+    without any auto-detection — if the binary is not in PATH an error is printed
+    and None is returned.
+    Otherwise checks MDIFY_CONTAINER_RUNTIME environment variable, then falls
+    back to OS-priority auto-detection: on macOS tries native tools first
+    (Apple Container → OrbStack → Podman → Docker); on other platforms tries
+    Docker → Podman.
+
+    Note: Colima is a VM manager and is not a supported container runtime.
+    When Colima is running, use --runtime docker (docker talks to Colima's socket).
 
     Args:
-        preferred: Preferred runtime name override (deprecated, use MDIFY_CONTAINER_RUNTIME)
+        preferred: Runtime explicitly requested by the user via --runtime flag.
         explicit: If True, print info about detection/fallback choices.
 
     Returns:
         Path to runtime executable, or None if not found.
     """
+    # Check for explicit --runtime argument (user's direct choice)
+    if preferred:
+        preferred_lower = preferred.strip().lower()
+        if preferred_lower not in SUPPORTED_RUNTIMES:
+            print(
+                f"Warning: --runtime '{preferred_lower}' is not supported. "
+                f"Supported: {', '.join(SUPPORTED_RUNTIMES)}",
+                file=sys.stderr,
+            )
+        else:
+            runtime_path = shutil.which(preferred_lower)
+            if runtime_path:
+                if explicit:
+                    print(f"Using container runtime: {preferred_lower}")
+                return runtime_path
+            else:
+                print(
+                    f"Error: --runtime '{preferred_lower}' not found in PATH",
+                    file=sys.stderr,
+                )
+                return None
+
     # Check for explicit environment variable override
     env_runtime = os.environ.get("MDIFY_CONTAINER_RUNTIME", "").strip().lower()
     if env_runtime:
@@ -403,7 +432,8 @@ def detect_runtime(preferred: Optional[str] = None, explicit: bool = True) -> Op
         )
         if is_macos:
             print(
-                "  macOS tip: Start OrbStack, Colima, or Podman Desktop application",
+                "  macOS tip: Start OrbStack, Podman Desktop, or Docker Desktop application",
+                "  (If using Colima, start it first — then use --runtime docker)",
                 file=sys.stderr,
             )
         return None
@@ -565,7 +595,7 @@ def get_free_space(path: str) -> int:
 
 def get_storage_root(runtime: str) -> Optional[str]:
     """
-    Get the storage root directory for Docker, Podman, OrbStack, or Colima.
+    Get the storage root directory for Docker, Podman, OrbStack, or Apple Container.
 
     Args:
         runtime: Path to container runtime executable
@@ -598,10 +628,6 @@ def get_storage_root(runtime: str) -> Optional[str]:
             # OrbStack stores containers in ~/.orbstack
             home = os.path.expanduser("~")
             return os.path.join(home, ".orbstack")
-        elif runtime_name == "colima":
-            # Colima stores containers in ~/.colima
-            home = os.path.expanduser("~")
-            return os.path.join(home, ".colima")
         elif runtime_name == "container":
             # Apple Container stores data in Application Support
             home = os.path.expanduser("~")
