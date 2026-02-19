@@ -132,13 +132,15 @@ class TestDetectRuntime:
             result = detect_runtime(explicit=False)
             assert result == "/usr/local/bin/orbstack"
 
-    def test_env_var_override_colima(self, monkeypatch):
-        """Test MDIFY_CONTAINER_RUNTIME env var works for colima."""
+    def test_env_var_override_colima_rejected(self, monkeypatch, capsys):
+        """Test MDIFY_CONTAINER_RUNTIME=colima is rejected (colima is a VM manager, not a container CLI)."""
         monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "colima")
-        with patch("mdify.cli.shutil.which") as mock_which:
-            mock_which.return_value = "/usr/local/bin/colima"
-            result = detect_runtime(explicit=False)
-            assert result == "/usr/local/bin/colima"
+        with patch("mdify.cli.shutil.which", return_value=None):
+            with patch("mdify.cli.platform.system", return_value="Linux"):
+                result = detect_runtime(explicit=False)
+                assert result is None
+                captured = capsys.readouterr()
+                assert "MDIFY_CONTAINER_RUNTIME='colima' is not supported" in captured.err
 
     def test_env_var_not_found_in_path(self, monkeypatch, capsys):
         """Test MDIFY_CONTAINER_RUNTIME env var when tool not in PATH."""
@@ -170,25 +172,25 @@ class TestDetectRuntime:
                     result = detect_runtime(explicit=False)
                     assert result == "/usr/local/bin/orbstack"
 
-    def test_macos_fallback_colima_when_orbstack_not_running(self, monkeypatch):
-        """Test macOS falls back to Colima if OrbStack not running."""
+    def test_macos_fallback_podman_when_orbstack_not_running(self, monkeypatch):
+        """Test macOS falls back to Podman if OrbStack not running."""
         monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
         with patch("mdify.cli.platform.system", return_value="Darwin"):
             with patch("mdify.cli.shutil.which") as mock_which:
                 with patch("mdify.cli.is_daemon_running") as mock_running:
-                    # Setup: orbstack exists but not running, colima exists and running
+                    # Setup: orbstack exists but not running, podman exists and running
                     def which_side_effect(x):
-                        if x in ("orbstack", "colima"):
+                        if x in ("orbstack", "podman"):
                             return f"/usr/local/bin/{x}"
                         return None
                     
                     def running_side_effect(path):
-                        return "colima" in path
+                        return "podman" in path
                     
                     mock_which.side_effect = which_side_effect
                     mock_running.side_effect = running_side_effect
                     result = detect_runtime(explicit=False)
-                    assert result == "/usr/local/bin/colima"
+                    assert result == "/usr/local/bin/podman"
 
     def test_non_macos_priority_docker_first(self, monkeypatch):
         """Test non-macOS prefers Docker over other tools."""
@@ -249,7 +251,7 @@ class TestDetectRuntime:
             with patch("mdify.cli.shutil.which") as mock_which:
                 with patch("mdify.cli.is_daemon_running", return_value=False):
                     def which_side_effect(x):
-                        if x in ("orbstack", "colima", "podman", "docker"):
+                        if x in ("orbstack", "podman", "docker"):
                             return f"/usr/local/bin/{x}"
                         return None
                     
@@ -259,7 +261,7 @@ class TestDetectRuntime:
                     captured = capsys.readouterr()
                     assert "daemon is not running" in captured.err
                     assert "orbstack" in captured.err
-                    assert "colima" in captured.err
+                    assert "docker" in captured.err
 
 
 class TestNewCLIArgs:
@@ -1276,14 +1278,12 @@ class TestGetStorageRoot:
         result = get_storage_root("/usr/local/bin/orbstack")
         assert result == f"{home}/.orbstack"
 
-    def test_colima_storage_root(self, monkeypatch):
-        """Test get_storage_root returns Colima storage root."""
+    def test_colima_storage_root_returns_none(self, monkeypatch):
+        """Test get_storage_root returns None for colima (no longer a supported runtime)."""
         from mdify.cli import get_storage_root
 
-        home = "/Users/testuser"
-        monkeypatch.setenv("HOME", home)
         result = get_storage_root("/usr/local/bin/colima")
-        assert result == f"{home}/.colima"
+        assert result is None
 
     def test_orbstack_storage_root_with_full_path(self, monkeypatch):
         """Test get_storage_root works with full path to OrbStack executable."""
@@ -1293,15 +1293,6 @@ class TestGetStorageRoot:
         monkeypatch.setenv("HOME", home)
         result = get_storage_root("/opt/homebrew/bin/orbstack")
         assert result == f"{home}/.orbstack"
-
-    def test_colima_storage_root_with_full_path(self, monkeypatch):
-        """Test get_storage_root works with full path to Colima executable."""
-        from mdify.cli import get_storage_root
-
-        home = "/Users/apple"
-        monkeypatch.setenv("HOME", home)
-        result = get_storage_root("/opt/homebrew/bin/colima")
-        assert result == f"{home}/.colima"
 
     def test_apple_container_storage_root(self, monkeypatch):
         """Test get_storage_root returns Apple Container storage root."""
