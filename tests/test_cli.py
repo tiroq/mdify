@@ -84,15 +84,16 @@ class TestDetectRuntime:
                 result = detect_runtime("docker", explicit=True)
                 assert result == "/usr/bin/docker"
 
-    def test_explicit_docker_fallback_to_podman(self, capsys):
+    def test_explicit_docker_not_found_returns_none(self, capsys):
         with patch("mdify.cli.shutil.which") as mock_which:
-            with patch("mdify.cli.is_daemon_running", return_value=True):
-                mock_which.side_effect = (
-                    lambda x: "/usr/bin/podman" if x == "podman" else None
-                )
-                result = detect_runtime("docker", explicit=True)
-                assert result == "/usr/bin/podman"
-                # With new macOS priority-based detection, priority order is used
+            mock_which.side_effect = (
+                lambda x: "/usr/bin/podman" if x == "podman" else None
+            )
+            result = detect_runtime("docker", explicit=True)
+            assert result is None
+            captured = capsys.readouterr()
+            assert "docker" in captured.err
+            assert "not found in PATH" in captured.err
 
     def test_explicit_docker_neither_exists(self):
         with patch("mdify.cli.shutil.which", return_value=None):
@@ -108,15 +109,16 @@ class TestDetectRuntime:
                 result = detect_runtime("podman", explicit=True)
                 assert result == "/usr/bin/podman"
 
-    def test_explicit_podman_fallback_to_docker(self, capsys):
+    def test_explicit_podman_not_found_returns_none(self, capsys):
         with patch("mdify.cli.shutil.which") as mock_which:
-            with patch("mdify.cli.is_daemon_running", return_value=True):
-                mock_which.side_effect = (
-                    lambda x: "/usr/bin/docker" if x == "docker" else None
-                )
-                result = detect_runtime("podman", explicit=True)
-                assert result == "/usr/bin/docker"
-                # With new macOS priority-based detection, priority order is used
+            mock_which.side_effect = (
+                lambda x: "/usr/bin/docker" if x == "docker" else None
+            )
+            result = detect_runtime("podman", explicit=True)
+            assert result is None
+            captured = capsys.readouterr()
+            assert "podman" in captured.err
+            assert "not found in PATH" in captured.err
 
     def test_explicit_podman_neither_exists(self):
         with patch("mdify.cli.shutil.which", return_value=None):
@@ -124,6 +126,16 @@ class TestDetectRuntime:
             assert result is None
 
     # Tests for new macOS native tool support
+    def test_runtime_arg_bypasses_macos_priority(self, monkeypatch):
+        """Test --runtime docker on macOS uses docker directly, not macOS priority order."""
+        monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "")
+        with patch("mdify.cli.platform.system", return_value="Darwin"):
+            with patch("mdify.cli.shutil.which") as mock_which:
+                # colima would win macOS priority, but docker is explicitly requested
+                mock_which.side_effect = lambda x: f"/usr/local/bin/{x}" if x == "docker" else None
+                result = detect_runtime(preferred="docker", explicit=False)
+                assert result == "/usr/local/bin/docker"
+
     def test_env_var_override_orbstack(self, monkeypatch):
         """Test MDIFY_CONTAINER_RUNTIME env var overrides detection."""
         monkeypatch.setenv("MDIFY_CONTAINER_RUNTIME", "orbstack")
