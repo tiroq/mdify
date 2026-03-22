@@ -865,6 +865,7 @@ class FileProgressTracker:
 SUPPORTED_EXTENSIONS = {
     # Document formats
     ".pdf",  # PDF
+    ".doc",   # Microsoft Word (legacy binary format)
     ".docx",  # Microsoft Word (Office Open XML)
     ".xlsx",  # Microsoft Excel (Office Open XML)
     ".pptx",  # Microsoft PowerPoint (Office Open XML)

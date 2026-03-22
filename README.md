@@ -8,6 +8,20 @@
 
 A lightweight CLI for converting documents to Markdown. The CLI is fast to install via pipx, while the heavy ML conversion runs inside a container.
 
+## Supported Input Formats
+
+| Format | Extensions |
+|--------|-----------|
+| PDF | `.pdf` |
+| Microsoft Word | `.doc`, `.docx` |
+| Microsoft Excel | `.xlsx` |
+| Microsoft PowerPoint | `.pptx` |
+| HTML | `.html`, `.htm`, `.xhtml` |
+| AsciiDoc | `.asciidoc`, `.adoc`, `.asc` |
+| CSV | `.csv` |
+| Images | `.png`, `.jpg`, `.jpeg`, `.tiff`, `.tif`, `.bmp`, `.webp` |
+| WebVTT | `.vtt` |
+
 ## Requirements
 
 - **Python 3.8+**

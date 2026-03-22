@@ -864,6 +864,21 @@ class TestFileHandling:
         assert len(result) == 1
         assert result[0].name == "visible.pdf"
 
+    def test_doc_format_included(self, tmp_path):
+        """Legacy .doc files are included as a supported format."""
+        (tmp_path / "report.doc").touch()
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 1
+        assert result[0].name == "report.doc"
+
+    def test_doc_and_docx_both_included(self, tmp_path):
+        """Both .doc and .docx files are included as supported formats."""
+        (tmp_path / "old.doc").touch()
+        (tmp_path / "new.docx").touch()
+        result = get_files_to_convert(tmp_path, mask="*", recursive=False)
+        assert len(result) == 2
+        assert {f.name for f in result} == {"old.doc", "new.docx"}
+
     def test_unsupported_extensions_excluded(self, tmp_path):
         """Files with unsupported extensions are filtered out."""
         (tmp_path / "doc.pdf").touch()  # Supported
